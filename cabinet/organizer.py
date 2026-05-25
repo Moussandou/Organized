@@ -1,31 +1,65 @@
 import os
 import shutil
+import hashlib
+import zipfile
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Tuple, Set
-from cabinet.config import get_category_for_extension
+from typing import List, Dict, Tuple, Optional
+
+from cabinet.config import get_category_for_extension, IGNORED_EXTENSIONS, load_rules
 
 class CabinetOrganizer:
     def __init__(self, target_dir: Path):
         self.target_dir = Path(target_dir).expanduser().resolve()
 
     def scan_files(self) -> List[Path]:
-        """Scan et retourne uniquement les fichiers présents à la racine du dossier cible."""
+        """Scan et retourne uniquement les fichiers présents à la racine du dossier cible (exclut les temporaires)."""
         if not self.target_dir.exists() or not self.target_dir.is_dir():
             return []
         
         files = []
         for item in self.target_dir.iterdir():
-            # On ignore les dossiers cachés et les fichiers systèmes (ex: .DS_Store)
             if item.is_file() and not item.name.startswith('.'):
-                files.append(item)
+                # On filtre les extensions temporaires de téléchargements en cours
+                if item.suffix.lower() not in IGNORED_EXTENSIONS and item.name != ".cabinet_history.json":
+                    files.append(item)
+        return files
+
+    def scan_all_files_recursive(self) -> List[Path]:
+        """Scan et retourne tous les fichiers présents dans le dossier cible et ses sous-dossiers (exclut les temporaires)."""
+        if not self.target_dir.exists() or not self.target_dir.is_dir():
+            return []
+            
+        files = []
+        for item in self.target_dir.rglob("*"):
+            # On ignore les fichiers masqués et les répertoires
+            if item.is_file() and not item.name.startswith('.'):
+                # Vérifie que le fichier n'est pas dans un sous-dossier masqué
+                try:
+                    rel_parts = item.relative_to(self.target_dir).parts
+                    if any(part.startswith('.') for part in rel_parts):
+                        continue
+                except ValueError:
+                    continue
+                    
+                if item.suffix.lower() not in IGNORED_EXTENSIONS and item.name != ".cabinet_history.json":
+                    files.append(item)
         return files
 
     def get_destination(self, file_path: Path, strategy: str) -> Path:
-        """Calcule le chemin de destination d'un fichier selon la stratégie choisie."""
+        """Calcule le chemin de destination d'un fichier selon les règles et la stratégie choisie."""
+        # 1. Vérification des Smart Rules personnalisées (priorité absolue)
+        rules = load_rules()
+        for rule in rules:
+            pattern = rule.get("pattern", "")
+            folder = rule.get("folder", "")
+            if pattern and folder and pattern.lower() in file_path.name.lower():
+                dest_dir = self.target_dir / folder
+                return dest_dir / file_path.name
+
+        # 2. Application de la stratégie par défaut
         suffix = file_path.suffix.lower()
         
-        # Récupération de la date de modification pour le classement temporel
         try:
             mtime = file_path.stat().st_mtime
             file_date = datetime.fromtimestamp(mtime)
@@ -40,14 +74,11 @@ class CabinetOrganizer:
         elif strategy == "date":
             dest_dir = self.target_dir / date_str
         elif strategy == "extension":
-            # Si pas d'extension, on met dans "Sans_Extension"
             ext_folder = suffix.replace('.', '').upper() if suffix else "SANS_EXTENSION"
             dest_dir = self.target_dir / ext_folder
         elif strategy == "hybrid":
-            # Combinaison : Catégorie puis Date
             dest_dir = self.target_dir / category / date_str
         else:
-            # Sécurité par défaut
             dest_dir = self.target_dir / "Divers"
             
         return dest_dir / file_path.name
@@ -74,10 +105,8 @@ class CabinetOrganizer:
         preview = {}
         for file in files:
             dest_path = self.get_destination(file, strategy)
-            # Résolution de conflit virtuelle pour la prévisualisation
             resolved_dest = self.resolve_conflict(dest_path)
             
-            # Utilisation de la version relative pour l'affichage de l'arborescence
             try:
                 rel_dest = resolved_dest.relative_to(self.target_dir)
                 dest_dir_name = str(rel_dest.parent)
@@ -103,10 +132,7 @@ class CabinetOrganizer:
             resolved_dest = self.resolve_conflict(dest_path)
             
             try:
-                # Création des répertoires parents s'ils n'existent pas
                 resolved_dest.parent.mkdir(parents=True, exist_ok=True)
-                
-                # Déplacement du fichier
                 shutil.move(str(file), str(resolved_dest))
                 
                 moves.append({
@@ -123,7 +149,6 @@ class CabinetOrganizer:
         reverted_count = 0
         errors = []
         
-        # On parcourt à l'envers pour restaurer correctement
         for move in reversed(moves):
             source_path = Path(move["source"])
             dest_path = Path(move["dest"])
@@ -133,17 +158,11 @@ class CabinetOrganizer:
                 continue
                 
             try:
-                # Si le dossier d'origine a été supprimé, on le recrée
                 source_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                # S'il y a un conflit à la source (par exemple si un nouveau fichier a été créé),
-                # on renomme le fichier restauré pour ne rien écraser.
                 resolved_source = self.resolve_conflict(source_path)
-                
                 shutil.move(str(dest_path), str(resolved_source))
                 reverted_count += 1
                 
-                # Nettoyage des dossiers vides créés lors de l'organisation
                 self._clean_empty_parents(dest_path.parent)
             except Exception as e:
                 errors.append(f"Impossible de restaurer {dest_path.name} : {str(e)}")
@@ -153,7 +172,6 @@ class CabinetOrganizer:
     def _clean_empty_parents(self, path: Path):
         """Supprime récursivement les répertoires vides jusqu'au dossier cible racine."""
         current = path
-        # On remonte tant qu'on est dans un sous-dossier du dossier cible
         while current != self.target_dir and current.parts > self.target_dir.parts:
             try:
                 if current.exists() and current.is_dir() and not any(current.iterdir()):
@@ -163,3 +181,100 @@ class CabinetOrganizer:
                     break
             except Exception:
                 break
+
+    def _get_file_hash(self, path: Path) -> str:
+        """Calcule le hash SHA-256 d'un fichier."""
+        hash_sha = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_sha.update(chunk)
+        return hash_sha.hexdigest()
+
+    def find_duplicates(self, recursive: bool = False) -> Dict[str, List[Path]]:
+        """Identifie les fichiers en doublon en comparant leur hash SHA-256."""
+        files = self.scan_all_files_recursive() if recursive else self.scan_files()
+        
+        hashes = {}
+        for file in files:
+            try:
+                if file.stat().st_size == 0:
+                    continue
+                file_hash = self._get_file_hash(file)
+                if file_hash not in hashes:
+                    hashes[file_hash] = []
+                hashes[file_hash].append(file)
+            except Exception:
+                continue
+                
+        return {h: paths for h, paths in hashes.items() if len(paths) > 1}
+
+    def get_old_files(self, days: int) -> List[Path]:
+        """Retourne la liste des fichiers qui n'ont pas été modifiés depuis X jours."""
+        files = self.scan_all_files_recursive()
+        now = datetime.now()
+        old_files = []
+        for file in files:
+            try:
+                mtime = datetime.fromtimestamp(file.stat().st_mtime)
+                age_days = (now - mtime).days
+                if age_days >= days:
+                    old_files.append(file)
+            except Exception:
+                continue
+        return old_files
+
+    def clean_old_files(self, days: int, action: str) -> Tuple[int, Optional[Path], List[str]]:
+        """Archives ou supprime (Corbeille) les vieux fichiers."""
+        old_files = self.get_old_files(days)
+        if not old_files:
+            return 0, None, []
+            
+        errors = []
+        success_count = 0
+        trash_dir = Path.home() / ".Trash"
+        trash_dir.mkdir(parents=True, exist_ok=True)
+        
+        if action == "trash":
+            for file in old_files:
+                try:
+                    dest = self.resolve_conflict(trash_dir / file.name)
+                    shutil.move(str(file), str(dest))
+                    success_count += 1
+                except Exception as e:
+                    errors.append(f"Erreur de mise à la Corbeille pour {file.name} : {str(e)}")
+            return success_count, None, errors
+            
+        elif action == "archive":
+            archive_name = f"archive_downloads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+            archive_path = self.target_dir / archive_name
+            archive_path = self.resolve_conflict(archive_path)
+            
+            try:
+                with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for file in old_files:
+                        try:
+                            rel_path = file.relative_to(self.target_dir)
+                            zipf.write(file, rel_path)
+                        except Exception as e:
+                            errors.append(f"Erreur d'archivage de {file.name} : {str(e)}")
+                            
+                # Déplacement des fichiers d'origine dans la Corbeille
+                if archive_path.exists():
+                    for file in old_files:
+                        if file == archive_path:
+                            continue
+                        try:
+                            dest = self.resolve_conflict(trash_dir / file.name)
+                            shutil.move(str(file), str(dest))
+                            success_count += 1
+                        except Exception as e:
+                            errors.append(f"Erreur de suppression après archivage pour {file.name} : {str(e)}")
+            except Exception as e:
+                errors.append(f"Erreur de création du fichier ZIP : {str(e)}")
+                if archive_path.exists():
+                    archive_path.unlink()
+                return 0, None, errors
+                
+            return success_count, archive_path, errors
+        
+        return 0, None, ["Action non reconnue"]
