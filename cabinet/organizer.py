@@ -191,22 +191,38 @@ class CabinetOrganizer:
         return hash_sha.hexdigest()
 
     def find_duplicates(self, recursive: bool = False) -> Dict[str, List[Path]]:
-        """Identifie les fichiers en doublon en comparant leur hash SHA-256."""
+        """Identifie les fichiers en doublon en comparant taille et hash SHA-256 (composite key)."""
         files = self.scan_all_files_recursive() if recursive else self.scan_files()
         
-        hashes = {}
+        # Groupement par taille pour éviter les calculs de hash inutiles sur les fichiers uniques
+        by_size = {}
         for file in files:
             try:
-                if file.stat().st_size == 0:
+                size = file.stat().st_size
+                if size == 0:
                     continue
-                file_hash = self._get_file_hash(file)
-                if file_hash not in hashes:
-                    hashes[file_hash] = []
-                hashes[file_hash].append(file)
+                if size not in by_size:
+                    by_size[size] = []
+                by_size[size].append(file)
             except Exception:
                 continue
                 
-        return {h: paths for h, paths in hashes.items() if len(paths) > 1}
+        candidate_sizes = {s: paths for s, paths in by_size.items() if len(paths) > 1}
+        
+        # Calcul du hash uniquement pour les groupes de taille identique
+        hashes = {}
+        for size, paths in candidate_sizes.items():
+            for file in paths:
+                try:
+                    file_hash = self._get_file_hash(file)
+                    composite_key = f"{size}_{file_hash}"
+                    if composite_key not in hashes:
+                        hashes[composite_key] = []
+                    hashes[composite_key].append(file)
+                except Exception:
+                    continue
+                    
+        return {k: paths for k, paths in hashes.items() if len(paths) > 1}
 
     def get_old_files(self, days: int) -> List[Path]:
         """Retourne la liste des fichiers qui n'ont pas été modifiés depuis X jours."""

@@ -333,8 +333,22 @@ def run_organization_flow(organizer: CabinetOrganizer, strategy: str):
         for err in errors:
             console.print(f"[red]• {err}[/red]")
 
+import subprocess
+
+def open_file_system(path: Path):
+    """Ouvre un fichier avec l'application par défaut du système."""
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=True)
+        elif sys.platform.startswith("linux"):
+            subprocess.run(["xdg-open", str(path)], check=True)
+        elif sys.platform == "win32":
+            os.startfile(path)
+    except Exception as e:
+        console.print(f"[bold red]Impossible d'ouvrir le fichier : {str(e)}[/bold red]")
+
 def run_duplicates_flow(organizer: CabinetOrganizer):
-    """Gère la recherche et le nettoyage des doublons."""
+    """Gère la recherche, la comparaison et la suppression sélective des doublons."""
     choices = [
         "Dossier racine uniquement (Téléchargements)",
         "Récursif (Tous les sous-dossiers compris)"
@@ -347,93 +361,101 @@ def run_duplicates_flow(organizer: CabinetOrganizer):
         TextColumn("[progress.description]{task.description}"),
         transient=True
     ) as progress:
-        progress.add_task("[cyan]Recherche de doublons en cours...", total=None)
+        progress.add_task("[cyan]Analyse de l'espace et calcul des signatures (SHA-256)...", total=None)
         duplicate_groups = organizer.find_duplicates(recursive=recursive)
         
     if not duplicate_groups:
         console.print(Panel(
-            "[bold green]Aucun fichier en doublon n'a été détecté ![/bold green]", 
+            "[bold green]Aucun fichier en doublon n'a été détecté ![/bold green]\n"
+            "Chaque fichier possède une signature de contenu unique.", 
             border_style="green"
         ))
         return
         
-    table = Table(title="Doublons détectés", border_style="yellow")
-    table.add_column("Groupe", justify="center", style="bold yellow")
-    table.add_column("Fichiers correspondants", style="cyan")
-    table.add_column("Taille", justify="right", style="magenta")
+    console.print(Panel(
+        f"[bold yellow]Analyse terminée : {len(duplicate_groups)} groupe(s) de doublons détecté(s).[/bold yellow]\n"
+        "Vous allez pouvoir passer en revue chaque groupe, comparer les fichiers et choisir celui à conserver.",
+        border_style="yellow"
+    ))
     
-    total_redundant_size = 0
-    files_to_delete = []
-    group_idx = 1
+    deleted_count = 0
+    total_freed_size = 0
+    errors = []
     
-    for file_hash, paths in duplicate_groups.items():
-        try:
-            keep_file = paths[0]
-            del_files = paths[1:]
-            
-            size = keep_file.stat().st_size
-            group_redundant_size = size * len(del_files)
-            total_redundant_size += group_redundant_size
-            
-            files_to_delete.extend(del_files)
-            
-            file_lines = [f"[bold green]➔ Conserver :[/bold green] {keep_file.name}"]
-            for df in del_files:
-                try:
-                    rel_df = df.relative_to(organizer.target_dir)
-                except ValueError:
-                    rel_df = df
-                file_lines.append(f"[red]✕ Supprimer :[/red] {rel_df}")
-                
-            table.add_row(
-                str(group_idx), 
-                "\n".join(file_lines), 
-                format_size(size)
-            )
-            group_idx += 1
-        except Exception:
-            continue
-            
-    console.print(table)
-    console.print(
-        f"\n[bold yellow]Attention :[/bold yellow] [cyan]{len(files_to_delete)}[/cyan] fichiers doublons détectés. "
-        f"Espace récupérable : [bold magenta]{format_size(total_redundant_size)}[/bold magenta]\n"
-    )
-    
-    confirm = interactive_confirm("Voulez-vous envoyer les doublons à la Corbeille macOS ?")
-    if not confirm:
-        console.print("[dim]Action annulée.[/dim]")
-        return
-        
     trash_dir = Path.home() / ".Trash"
     trash_dir.mkdir(parents=True, exist_ok=True)
     
-    deleted_count = 0
-    errors = []
-    
-    with Progress(
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(bar_width=40, complete_style="red"),
-        TaskProgressColumn(),
-    ) as progress:
-        task = progress.add_task("[red]Déplacement vers la Corbeille...", total=len(files_to_delete))
+    group_idx = 1
+    for composite_key, paths in duplicate_groups.items():
+        # Extraction de la taille à partir de la clé composite (format: "taille_hash")
+        try:
+            size = int(composite_key.split('_')[0])
+        except Exception:
+            size = paths[0].stat().st_size
+            
+        size_str = format_size(size)
         
-        for file in files_to_delete:
-            try:
-                if file.exists():
-                    dest = organizer.resolve_conflict(trash_dir / file.name)
-                    shutil.move(str(file), str(dest))
-                    deleted_count += 1
-                progress.advance(task, 1)
-                time.sleep(0.02)
-            except Exception as e:
-                errors.append(f"Erreur avec {file.name} : {str(e)}")
-                progress.advance(task, 1)
+        while True:
+            # Construction des options d'interaction pour ce groupe
+            options = []
+            for p in paths:
+                try:
+                    rel_p = p.relative_to(organizer.target_dir)
+                except ValueError:
+                    rel_p = p
+                options.append(f"Conserver uniquement : [bold green]{rel_p}[/bold green]")
                 
+            options.append("🔍 [cyan]Ouvrir tous les fichiers du groupe pour les comparer[/cyan]")
+            options.append("⏩ [yellow]Ignorer ce groupe (ne rien supprimer)[/yellow]")
+            
+            header = (
+                f"[bold cyan]Groupe {group_idx}/{len(duplicate_groups)}[/bold cyan] - "
+                f"Taille par fichier : [bold magenta]{size_str}[/bold magenta]\n"
+                f"Contenu validé à 100% identique par signature cryptographique.\n\n"
+                f"Choisissez le fichier à [bold green]CONSERVER[/bold green] (les autres seront envoyés à la Corbeille) :"
+            )
+            
+            choice_idx = interactive_select(options, header)
+            
+            if choice_idx < len(paths):
+                # L'utilisateur choisit d'en garder un
+                keep_path = paths[choice_idx]
+                del_paths = [p for p in paths if p != keep_path]
+                
+                # Déplacement des autres vers la Corbeille
+                for dp in del_paths:
+                    try:
+                        if dp.exists():
+                            dest = organizer.resolve_conflict(trash_dir / dp.name)
+                            shutil.move(str(dp), str(dest))
+                            deleted_count += 1
+                            total_freed_size += size
+                    except Exception as e:
+                        errors.append(f"Erreur de mise à la Corbeille pour {dp.name} : {str(e)}")
+                break
+                
+            elif choice_idx == len(paths):
+                # Ouvrir les fichiers pour les comparer
+                console.print("[cyan]Ouverture des fichiers avec les applications système par défaut...[/cyan]")
+                for p in paths:
+                    open_file_system(p)
+                time.sleep(0.8)
+                continue
+                
+            else:
+                # Ignorer ce groupe
+                console.print("[dim]Groupe ignoré.[/dim]")
+                break
+                
+        group_idx += 1
+        console.print("─" * 40)
+        
     console.print(Panel(
-        f"[bold green]Nettoyage terminé ! {deleted_count} fichiers envoyés à la Corbeille.[/bold green]\n"
-        f"Espace disque libéré : [bold magenta]{format_size(total_redundant_size)}[/bold magenta]",
-        border_style="green"
+        f"[bold green]Opération terminée ![/bold green]\n"
+        f"• Doublons nettoyés : [cyan]{deleted_count}[/cyan]\n"
+        f"• Espace disque récupéré : [bold magenta]{format_size(total_freed_size)}[/bold magenta]",
+        border_style="green",
+        title="[bold]Bilan Nettoyage Doublons[/bold]"
     ))
     
     if errors:
