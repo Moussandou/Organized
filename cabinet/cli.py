@@ -737,6 +737,12 @@ def run_stats_flow(organizer: CabinetOrganizer):
 
 def main():
     """Point d'entrée principal de l'application Cabinet CLI."""
+    from cabinet.config import setup_logging, LOG_FILE
+    import logging
+    
+    setup_logging()
+    logging.info("=== Démarrage de la session Cabinet CLI ===")
+    
     try:
         # Lancement de l'animation de démarrage colorée
         welcome_animation()
@@ -796,16 +802,33 @@ def main():
                 run_stats_flow(organizer)
             elif choice_idx == 9:
                 console.print("\n[bold green]Au revoir ! Merci d'avoir utilisé Cabinet.[/bold green]")
+                logging.info("Fermeture propre de Cabinet CLI.")
                 break
             
             console.print("\n" + "─" * 50 + "\n")
     except KeyboardInterrupt:
+        logging.info("Session interrompue par l'utilisateur (Ctrl+C)")
         console.print("\n\n[bold yellow]Cabinet interrompu (Ctrl+C). Au revoir ![/bold yellow]")
         try:
             console.show_cursor(True)
         except Exception:
             pass
         sys.exit(0)
+    except Exception as e:
+        logging.exception("Une erreur inattendue et critique est survenue dans main() :")
+        console.print(Panel(
+            f"[bold red]Une erreur inattendue est survenue :[/bold red] {str(e)}\n\n"
+            f"Les détails techniques du crash ont été enregistrés dans :\n"
+            f"[bold cyan]{LOG_FILE}[/bold cyan]\n\n"
+            "Veuillez soumettre ce fichier pour débogage.",
+            title="[bold red]Erreur Critique de Cabinet[/bold red]",
+            border_style="red"
+        ))
+        try:
+            console.show_cursor(True)
+        except Exception:
+            pass
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

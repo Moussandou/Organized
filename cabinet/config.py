@@ -7,9 +7,28 @@ DEFAULT_TARGET_DIR = Path.home() / "Downloads"
 # Extensions temporaires à ignorer (téléchargements en cours)
 IGNORED_EXTENSIONS = [".crdownload", ".part", ".download", ".tmp"]
 
-# Emplacement de la configuration utilisateur
+import logging
+
+# Emplacement de la configuration utilisateur et des logs
 CONFIG_DIR = Path.home() / ".config" / "cabinet"
 RULES_FILE = CONFIG_DIR / "rules.json"
+LOG_FILE = CONFIG_DIR / "cabinet.log"
+
+def setup_logging():
+    """Configure le système de journalisation pour cabinet.log."""
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        # Configure logging to append to cabinet.log
+        logging.basicConfig(
+            filename=str(LOG_FILE),
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+            encoding="utf-8"
+        )
+    except Exception:
+        # Fallback pour éviter tout plantage sur les droits d'écriture
+        logging.basicConfig(handlers=[logging.NullHandler()])
 
 def load_rules() -> list:
     """Charge les règles personnalisées depuis le fichier JSON."""
@@ -25,7 +44,7 @@ def load_rules() -> list:
 def save_rules(rules: list):
     """Sauvegarde les règles personnalisées dans le fichier JSON."""
     try:
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        RULES_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(RULES_FILE, "w", encoding="utf-8") as f:
             json.dump(rules, f, indent=4, ensure_ascii=False)
     except Exception:
