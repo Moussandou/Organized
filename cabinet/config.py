@@ -1,21 +1,20 @@
 import json
 from pathlib import Path
-
-# Dossier par défaut à organiser (Dossier de Téléchargements de l'utilisateur)
-DEFAULT_TARGET_DIR = Path.home() / "Downloads"
-
-# Extensions temporaires à ignorer (téléchargements en cours)
-IGNORED_EXTENSIONS = [".crdownload", ".part", ".download", ".tmp"]
-
 import logging
 
-# Emplacement de la configuration utilisateur et des logs
+# Default directory to organize (User's Downloads folder)
+DEFAULT_TARGET_DIR = Path.home() / "Downloads"
+
+# Temporary extensions to ignore (ongoing downloads)
+IGNORED_EXTENSIONS = [".crdownload", ".part", ".download", ".tmp"]
+
+# Location of user configuration and logs
 CONFIG_DIR = Path.home() / ".config" / "cabinet"
 RULES_FILE = CONFIG_DIR / "rules.json"
 LOG_FILE = CONFIG_DIR / "cabinet.log"
 
 def setup_logging():
-    """Configure le système de journalisation pour cabinet.log."""
+    """Configure the logging system for cabinet.log."""
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         # Configure logging to append to cabinet.log
@@ -27,11 +26,11 @@ def setup_logging():
             encoding="utf-8"
         )
     except Exception:
-        # Fallback pour éviter tout plantage sur les droits d'écriture
+        # Fallback to prevent crashes due to write permission issues
         logging.basicConfig(handlers=[logging.NullHandler()])
 
 def load_rules() -> list:
-    """Charge les règles personnalisées depuis le fichier JSON."""
+    """Load custom rules from the JSON file."""
     if not RULES_FILE.exists():
         return []
     try:
@@ -42,7 +41,7 @@ def load_rules() -> list:
         return []
 
 def save_rules(rules: list):
-    """Sauvegarde les règles personnalisées dans le fichier JSON."""
+    """Save custom rules to the JSON file."""
     try:
         RULES_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(RULES_FILE, "w", encoding="utf-8") as f:
@@ -50,7 +49,7 @@ def save_rules(rules: list):
     except Exception:
         pass
 
-# Dictionnaire de catégorisation par défaut
+# Default categorization dictionary
 DEFAULT_CATEGORIES = {
     "Images": [
         ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".heic", 
@@ -83,7 +82,7 @@ DEFAULT_CATEGORIES = {
 }
 
 def get_category_for_extension(ext: str) -> str:
-    """Retourne la catégorie associée à une extension donnée."""
+    """Return the category associated with a given extension."""
     ext = ext.lower().strip()
     if not ext:
         return "Divers"

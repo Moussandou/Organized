@@ -5,7 +5,7 @@ import cabinet.history as history
 
 class TestHistory(unittest.TestCase):
     def setUp(self):
-        # Redirection du fichier d'historique vers un fichier temporaire
+        # Redirect history file path to a temporary location
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_history_file = Path(self.temp_dir.name) / "history.json"
         
@@ -17,17 +17,17 @@ class TestHistory(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_save_and_retrieve_session(self):
-        """Vérifie que la sauvegarde et la récupération de session fonctionnent."""
-        # 1. Pas d'historique initial
+        """Verify saving and retrieving sessions from the history file."""
+        # 1. Ensure no history exists initially
         self.assertIsNone(history.get_last_session())
         
-        # 2. Enregistrement d'une session
+        # 2. Record an organization session
         moves = [
             {"source": "a.txt", "dest": "b.txt"}
         ]
         history.save_session(moves, "category")
         
-        # 3. Récupération
+        # 3. Retrieve recorded session details
         last = history.get_last_session()
         self.assertIsNotNone(last)
         self.assertEqual(last["strategy"], "category")
@@ -35,7 +35,7 @@ class TestHistory(unittest.TestCase):
         self.assertEqual(last["moves"][0]["source"], "a.txt")
         self.assertEqual(last["moves"][0]["dest"], "b.txt")
         
-        # 4. Suppression (pop)
+        # 4. Pop and delete the last session
         popped = history.pop_last_session()
         self.assertEqual(popped["strategy"], "category")
         self.assertIsNone(history.get_last_session())

@@ -7,7 +7,7 @@ from typing import List, Dict, Optional
 HISTORY_FILE = Path.home() / ".cabinet_history.json"
 
 def save_session(moves: List[Dict[str, str]], strategy: str):
-    """Enregistre une session de rangement dans l'historique."""
+    """Record an organization session in the history."""
     session = {
         "timestamp": datetime.now().isoformat(),
         "strategy": strategy,
@@ -24,21 +24,21 @@ def save_session(moves: List[Dict[str, str]], strategy: str):
         except Exception:
             sessions = []
             
-    # On ajoute la nouvelle session au début
+    # Insert the new session at the beginning
     sessions.insert(0, session)
     
-    # On garde les 10 dernières sessions pour éviter d'avoir un fichier trop gros
+    # Keep only the last 10 sessions to limit file size
     sessions = sessions[:10]
     
     try:
         with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
             json.dump(sessions, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        # En cas d'erreur d'écriture, on ignore silencieusement pour ne pas bloquer l'outil
+    except Exception:
+        # Silently ignore write errors to avoid blocking the CLI tool
         pass
 
 def get_last_session() -> Optional[Dict]:
-    """Récupère les détails de la dernière session de rangement."""
+    """Retrieve details of the last organization session."""
     if not HISTORY_FILE.exists():
         return None
         
@@ -52,7 +52,7 @@ def get_last_session() -> Optional[Dict]:
     return None
 
 def pop_last_session() -> Optional[Dict]:
-    """Récupère et supprime la dernière session de rangement de l'historique."""
+    """Retrieve and remove the last organization session from history."""
     if not HISTORY_FILE.exists():
         return None
         

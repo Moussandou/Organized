@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 from datetime import datetime
+import shutil
 
 from rich.console import Console, Group
 from rich.panel import Panel
@@ -18,8 +19,9 @@ from rich.live import Live
 from cabinet.config import DEFAULT_TARGET_DIR, load_rules, save_rules
 from cabinet.organizer import CabinetOrganizer
 from cabinet.history import save_session, get_last_session, pop_last_session
+from cabinet.i18n import t, set_language, get_current_language
 
-# Compatibilité système pour la lecture brute des touches
+# Check system capability for raw key reading
 try:
     import tty
     import termios
@@ -38,27 +40,31 @@ BANNER = """
 """
 
 def get_char() -> str:
-    """Lit un caractère depuis le terminal en mode brut (Unix/macOS)."""
+    """Read a single character from the standard input in raw mode."""
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
     try:
         tty.setraw(sys.stdin.fileno())
         ch = sys.stdin.read(1)
-        if ch == '\x03':  # Ctrl+C
+        if ch == '\x03':  # Ctrl+C handler
             raise KeyboardInterrupt
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
     return ch
 
 def interactive_select(options: List[str], header: str = "") -> int:
-    """Affiche un menu interactif avec navigation par flèches du clavier."""
+    """Render an interactive keyboard-navigated menu."""
     if not UNIX_SYSTEM:
-        # Fallback pour les systèmes non-Unix (ex: Windows)
+        # Simple fallback for non-Unix operating systems (e.g. Windows)
         if header:
             console.print(header)
         for idx, opt in enumerate(options, start=1):
             console.print(f"  [bold cyan]{idx}[/bold cyan]. {opt}")
-        choice = Prompt.ask("\n[bold]Votre choix[/bold]", choices=[str(i) for i in range(1, len(options) + 1)], default="1")
+        choice = Prompt.ask(
+            f"\n[bold]{t('your_choice')}[/bold]", 
+            choices=[str(i) for i in range(1, len(options) + 1)], 
+            default="1"
+        )
         return int(choice) - 1
 
     selected_idx = 0
@@ -77,7 +83,7 @@ def interactive_select(options: List[str], header: str = "") -> int:
             full_text,
             border_style="magenta",
             expand=False,
-            title="[bold]Navigation : ⇅ | Validation : Entrée[/bold]",
+            title=f"[bold]{t('nav_help')}[/bold]",
             title_align="left"
         )
 
@@ -91,24 +97,24 @@ def interactive_select(options: List[str], header: str = "") -> int:
                 ch = get_char()
                 if ch in ('\r', '\n'):
                     return selected_idx
-                elif ch == '\x1b':  # Code d'échappement pour les flèches
+                elif ch == '\x1b':  # Escape sequence for arrow keys
                     ch2 = get_char()
                     ch3 = get_char()
                     if ch2 == '[':
-                        if ch3 == 'A':    # Flèche Haut
+                        if ch3 == 'A':    # Up Arrow
                             selected_idx = (selected_idx - 1) % len(options)
-                        elif ch3 == 'B':  # Flèche Bas
+                        elif ch3 == 'B':  # Down Arrow
                             selected_idx = (selected_idx + 1) % len(options)
     finally:
         console.show_cursor(True)
 
 def interactive_confirm(question: str) -> bool:
-    """Affiche une boîte de dialogue interactive Oui/Non avec déplacement horizontal."""
+    """Render an interactive Yes/No confirmation dialog."""
     if not UNIX_SYSTEM:
         return Confirm.ask(question)
         
-    selected_idx = 0  # 0 = Oui, 1 = Non
-    options = ["Oui", "Non"]
+    selected_idx = 0  # 0 = Yes, 1 = No
+    options = [t("yes"), t("no")]
     
     def generate_view() -> Panel:
         buttons = []
@@ -127,7 +133,7 @@ def interactive_confirm(question: str) -> bool:
             content,
             border_style="cyan",
             expand=False,
-            title="[bold]Confirmation[/bold]",
+            title=f"[bold]{t('confirmation_title')}[/bold]",
             title_align="center"
         )
         
@@ -145,34 +151,35 @@ def interactive_confirm(question: str) -> bool:
                     ch2 = get_char()
                     ch3 = get_char()
                     if ch2 == '[':
-                        if ch3 in ('C', 'D'):  # Flèches Gauche/Droite
+                        if ch3 in ('C', 'D'):  # Left/Right Arrows
                             selected_idx = 1 - selected_idx
     finally:
         console.show_cursor(True)
 
 def welcome_animation():
-    """Affiche un effet lumineux de chargement multicolore pour la bannière."""
+    """Display a colorful glowing welcome animation banner."""
     console.clear()
     colors = ["cyan", "magenta", "blue", "green"]
     for color in colors:
         console.clear()
         styled_banner = Text(BANNER, style=f"bold {color}")
         console.print(Align.center(styled_banner))
-        console.print(Align.center(f"[bold white]Démarrage de Cabinet CLI...[/bold white]"))
+        console.print(Align.center(f"[bold white]{t('starting_cli')}[/bold white]"))
         time.sleep(0.1)
     console.clear()
 
 def format_size(size_in_bytes: int) -> str:
-    """Formatte une taille d'octets en version lisible (Ko, Mo, Go)."""
+    """Format size in bytes to a human-readable string."""
     val = float(size_in_bytes)
-    for unit in ['o', 'Ko', 'Mo', 'Go']:
+    units = [t("b"), t("kb"), t("mb"), t("gb")]
+    for unit in units:
         if val < 1024.0:
             return f"{val:.1f} {unit}"
         val /= 1024.0
-    return f"{val:.1f} To"
+    return f"{val:.1f} {t('tb')}"
 
 def get_tree_preview(preview_dict: Dict[str, List[Tuple[Path, Path]]], root_dir: Path) -> Tree:
-    """Construit une arborescence visuelle des déplacements prévus."""
+    """Build a visual tree representation of planned file relocation operations."""
     tree = Tree(f"[bold cyan]📂 {root_dir.name}[/bold cyan]")
     node_map = {"": tree}
     
@@ -194,41 +201,41 @@ def get_tree_preview(preview_dict: Dict[str, List[Tuple[Path, Path]]], root_dir:
                 size = src.stat().st_size
                 size_str = format_size(size)
             except Exception:
-                size_str = "Taille inconnue"
+                size_str = t("size_unknown")
             leaf_node.add(f"[green]📄 {src.name}[/green] [dim]({size_str})[/dim]")
             
     return tree
 
 def run_undo(organizer: CabinetOrganizer):
-    """Gère l'action d'annulation du dernier rangement."""
+    """Roll back the last organization session."""
     last_session = get_last_session()
     
     if not last_session:
-        console.print(Panel("[bold red]Aucun historique de rangement trouvé.[/bold red]", border_style="red"))
+        console.print(Panel(f"[bold red]{t('no_history_found')}[/bold red]", border_style="red"))
         return
         
     timestamp_str = last_session.get("timestamp", "")
     try:
         dt = datetime.fromisoformat(timestamp_str)
-        date_formatted = dt.strftime("%d/%m/%Y à %H:%M:%S")
+        date_formatted = dt.strftime(f"%d/%m/%Y {t('at')} %H:%M:%S")
     except Exception:
         date_formatted = timestamp_str
         
-    strategy = last_session.get("strategy", "inconnue")
+    strategy = last_session.get("strategy", t("unknown"))
     moves = last_session.get("moves", [])
     
     console.print(Panel(
-        f"[bold yellow]Dernière session trouvée :[/bold yellow]\n"
-        f"• Date : [cyan]{date_formatted}[/cyan]\n"
-        f"• Stratégie : [cyan]{strategy}[/cyan]\n"
-        f"• Fichiers à restaurer : [cyan]{len(moves)}[/cyan]",
-        title="[bold]Annulation du rangement[/bold]",
+        f"[bold yellow]{t('last_session_found')}[/bold yellow]\n"
+        f"• {t('date_label')} : [cyan]{date_formatted}[/cyan]\n"
+        f"• {t('strategy_label')} : [cyan]{strategy}[/cyan]\n"
+        f"• {t('files_to_restore')} : [cyan]{len(moves)}[/cyan]",
+        title=f"[bold]{t('undo_title')}[/bold]",
         border_style="yellow"
     ))
     
-    confirm = interactive_confirm("Voulez-vous restaurer ces fichiers à leur emplacement d'origine ?")
+    confirm = interactive_confirm(t("confirm_restore"))
     if not confirm:
-        console.print("[dim]Annulation annulée.[/dim]")
+        console.print(f"[dim]{t('undo_canceled')}[/dim]")
         return
         
     with Progress(
@@ -236,52 +243,52 @@ def run_undo(organizer: CabinetOrganizer):
         TextColumn("[progress.description]{task.description}"),
         transient=True
     ) as progress:
-        task = progress.add_task("[yellow]Restauration des fichiers en cours...", total=None)
+        progress.add_task(f"[yellow]{t('restoring_files')}", total=None)
         popped_session = pop_last_session()
         if not popped_session:
-            console.print("[bold red]Erreur lors de la récupération de la session.[/bold red]")
+            console.print(f"[bold red]{t('error_restoring_session')}[/bold red]")
             return
             
         reverted_count, errors = organizer.revert_moves(popped_session["moves"])
         
     if reverted_count > 0:
         console.print(Panel(
-            f"[bold green]Succès ! {reverted_count} fichier(s) ont été restaurés.[/bold green]",
+            f"[bold green]{t('restored_success', count=reverted_count)}[/bold green]",
             border_style="green"
         ))
     
     if errors:
-        console.print("[bold red]Certaines erreurs sont survenues :[/bold red]")
+        console.print(f"[bold red]{t('some_errors_occurred')}[/bold red]")
         for err in errors:
             console.print(f"[red]• {err}[/red]")
 
 def run_organization_flow(organizer: CabinetOrganizer, strategy: str):
-    """Gère le workflow complet pour une stratégie de rangement."""
+    """Execute the full organization workflow for a selected strategy."""
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         transient=True
     ) as progress:
-        progress.add_task("[cyan]Scan du dossier...", total=None)
+        progress.add_task(f"[cyan]{t('scanning_folder')}", total=None)
         files = organizer.scan_files()
         
     if not files:
         console.print(Panel(
-            f"[bold green]Votre dossier Téléchargements ({organizer.target_dir.name}) est déjà propre ! Aucun fichier à ranger.[/bold green]",
+            f"[bold green]{t('folder_clean', name=organizer.target_dir.name)}[/bold green]",
             border_style="green"
         ))
         return
         
     preview = organizer.preview_organization(files, strategy)
     
-    console.print("\n[bold cyan]=== Prévisualisation du Rangement ===[/bold cyan]")
+    console.print(f"\n[bold cyan]{t('preview_title')}[/bold cyan]")
     tree_preview = get_tree_preview(preview, organizer.target_dir)
     console.print(tree_preview)
-    console.print(f"\n[bold]Total : {len(files)} fichier(s) à organiser.[/bold]\n")
+    console.print(f"\n[bold]{t('total_files_to_organize', count=len(files))}[/bold]\n")
     
-    confirm = interactive_confirm("Confirmer le rangement ?")
+    confirm = interactive_confirm(t("confirm_organization"))
     if not confirm:
-        console.print("[dim]Rangement annulé.[/dim]")
+        console.print(f"[dim]{t('organization_canceled')}[/dim]")
         return
         
     moves = []
@@ -292,24 +299,24 @@ def run_organization_flow(organizer: CabinetOrganizer, strategy: str):
         BarColumn(bar_width=40, complete_style="green", finished_style="bold green"),
         TaskProgressColumn(),
     ) as progress:
-        task = progress.add_task("[cyan]Déplacement des fichiers...", total=len(files))
+        task = progress.add_task(f"[cyan]{t('moving_files')}", total=len(files))
         
         for file in files:
             file_moves, file_errors = organizer.organize([file], strategy)
             moves.extend(file_moves)
             errors.extend(file_errors)
             progress.advance(task, 1)
-            time.sleep(0.02)  # Petite pause pour l'effet visuel fluide
+            time.sleep(0.02)  # Tiny sleep for smooth visual rendering
             
     if moves:
         save_session(moves, strategy)
         
-    console.print("\n[bold green]✓ Rangement terminé avec succès ![/bold green]\n")
+    console.print(f"\n[bold green]{t('organization_success')}[/bold green]\n")
     
-    table = Table(title="Résumé des fichiers rangés", border_style="cyan")
-    table.add_column("Fichier", style="green", no_wrap=True)
-    table.add_column("Destination", style="yellow")
-    table.add_column("Taille", justify="right", style="magenta")
+    table = Table(title=t("summary_title"), border_style="cyan")
+    table.add_column(t("summary_file"), style="green", no_wrap=True)
+    table.add_column(t("summary_dest"), style="yellow")
+    table.add_column(t("summary_size"), justify="right", style="magenta")
     
     total_size = 0
     for move in moves:
@@ -329,34 +336,34 @@ def run_organization_flow(organizer: CabinetOrganizer, strategy: str):
         table.add_row(dest_path.name, str(rel_dest.parent), size_str)
         
     console.print(table)
-    console.print(f"\n[bold]Fichiers déplacés : [cyan]{len(moves)}[/cyan] | Espace organisé : [magenta]{format_size(total_size)}[/magenta][/bold]\n")
+    console.print(f"\n[bold]{t('summary_moved_count', count=len(moves), size=format_size(total_size))}[/bold]\n")
     
     if errors:
-        console.print("[bold red]Certains fichiers n'ont pas pu être déplacés :[/bold red]")
+        console.print(f"[bold red]{t('cannot_move_errors')}[/bold red]")
         for err in errors:
             console.print(f"[red]• {err}[/red]")
 
-import subprocess
-
 def open_file_system(path: Path):
-    """Ouvre un fichier avec l'application par défaut du système."""
+    """Open a file using the host operating system's default handler application."""
     try:
         if sys.platform == "darwin":
+            import subprocess
             subprocess.run(["open", str(path)], check=True)
         elif sys.platform.startswith("linux"):
+            import subprocess
             subprocess.run(["xdg-open", str(path)], check=True)
         elif sys.platform == "win32":
             os.startfile(path)
     except Exception as e:
-        console.print(f"[bold red]Impossible d'ouvrir le fichier : {str(e)}[/bold red]")
+        console.print(f"[bold red]{t('open_file_error', name=path.name, err=str(e))}[/bold red]")
 
 def run_duplicates_flow(organizer: CabinetOrganizer):
-    """Gère la recherche, la comparaison et la suppression sélective des doublons."""
+    """Scan, preview, and selectively purge duplicate files."""
     choices = [
-        "Dossier racine uniquement (Téléchargements)",
-        "Récursif (Tous les sous-dossiers compris)"
+        t("dup_scope_root"),
+        t("dup_scope_rec")
     ]
-    idx = interactive_select(choices, "[bold yellow]Choisissez la portée de la recherche de doublons :[/bold yellow]")
+    idx = interactive_select(choices, f"[bold yellow]{t('dup_scope_select')}[/bold yellow]")
     recursive = (idx == 1)
     
     with Progress(
@@ -364,22 +371,28 @@ def run_duplicates_flow(organizer: CabinetOrganizer):
         TextColumn("[progress.description]{task.description}"),
         transient=True
     ) as progress:
-        progress.add_task("[cyan]Analyse de l'espace et calcul des signatures (SHA-256)...", total=None)
+        progress.add_task(f"[cyan]{t('duplicate_scan')}", total=None)
         duplicate_groups = organizer.find_duplicates(recursive=recursive)
         
     if not duplicate_groups:
         console.print(Panel(
-            "[bold green]Aucun fichier en doublon n'a été détecté ![/bold green]\n"
-            "Chaque fichier possède une signature de contenu unique.", 
+            f"[bold green]{t('duplicate_no_files')}[/bold green]", 
             border_style="green"
         ))
+        Prompt.ask(t("press_enter"))
         return
         
     console.print(Panel(
-        f"[bold yellow]Analyse terminée : {len(duplicate_groups)} groupe(s) de doublons détecté(s).[/bold yellow]\n"
-        "Vous allez pouvoir passer en revue chaque groupe, comparer les fichiers et choisir celui à conserver.",
+        f"[bold yellow]{t('dup_scan_finished', count=len(duplicate_groups))}[/bold yellow]",
         border_style="yellow"
     ))
+    
+    # Prompt the user for execution mode: review one by one vs. clean all automatically
+    action_modes = [
+        t("dup_action_review"),
+        t("dup_action_auto")
+    ]
+    mode_idx = interactive_select(action_modes, f"[bold yellow]{t('dup_action_select')}[/bold yellow]")
     
     deleted_count = 0
     total_freed_size = 0
@@ -388,44 +401,29 @@ def run_duplicates_flow(organizer: CabinetOrganizer):
     trash_dir = Path.home() / ".Trash"
     trash_dir.mkdir(parents=True, exist_ok=True)
     
-    group_idx = 1
-    for composite_key, paths in duplicate_groups.items():
-        # Extraction de la taille à partir de la clé composite (format: "taille_hash")
-        try:
-            size = int(composite_key.split('_')[0])
-        except Exception:
-            size = paths[0].stat().st_size
+    if mode_idx == 1:
+        # Confirm automatic batch deletion
+        confirm = interactive_confirm(t("dup_confirm_auto"))
+        if not confirm:
+            console.print(f"[dim]{t('action_canceled')}[/dim]")
+            Prompt.ask(t("press_enter"))
+            return
             
-        size_str = format_size(size)
-        
-        while True:
-            # Construction des options d'interaction pour ce groupe
-            options = []
-            for p in paths:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            transient=True
+        ) as progress:
+            progress.add_task(f"[cyan]{t('dup_auto_cleaning')}", total=None)
+            for composite_key, paths in duplicate_groups.items():
                 try:
-                    rel_p = p.relative_to(organizer.target_dir)
-                except ValueError:
-                    rel_p = p
-                options.append(f"Conserver uniquement : [bold green]{rel_p}[/bold green]")
+                    size = int(composite_key.split('_')[0])
+                except Exception:
+                    size = paths[0].stat().st_size
                 
-            options.append("🔍 [cyan]Ouvrir tous les fichiers du groupe pour les comparer[/cyan]")
-            options.append("⏩ [yellow]Ignorer ce groupe (ne rien supprimer)[/yellow]")
-            
-            header = (
-                f"[bold cyan]Groupe {group_idx}/{len(duplicate_groups)}[/bold cyan] - "
-                f"Taille par fichier : [bold magenta]{size_str}[/bold magenta]\n"
-                f"Contenu validé à 100% identique par signature cryptographique.\n\n"
-                f"Choisissez le fichier à [bold green]CONSERVER[/bold green] (les autres seront envoyés à la Corbeille) :"
-            )
-            
-            choice_idx = interactive_select(options, header)
-            
-            if choice_idx < len(paths):
-                # L'utilisateur choisit d'en garder un
-                keep_path = paths[choice_idx]
-                del_paths = [p for p in paths if p != keep_path]
-                
-                # Déplacement des autres vers la Corbeille
+                # Keep the first file, delete the rest
+                keep_path = paths[0]
+                del_paths = paths[1:]
                 for dp in del_paths:
                     try:
                         if dp.exists():
@@ -434,43 +432,84 @@ def run_duplicates_flow(organizer: CabinetOrganizer):
                             deleted_count += 1
                             total_freed_size += size
                     except Exception as e:
-                        errors.append(f"Erreur de mise à la Corbeille pour {dp.name} : {str(e)}")
-                break
+                        errors.append(t("open_file_error", name=dp.name, err=str(e)))
+                        
+    else:
+        # Review one by one mode
+        group_idx = 1
+        for composite_key, paths in duplicate_groups.items():
+            try:
+                size = int(composite_key.split('_')[0])
+            except Exception:
+                size = paths[0].stat().st_size
                 
-            elif choice_idx == len(paths):
-                # Ouvrir les fichiers pour les comparer
-                console.print("[cyan]Ouverture des fichiers avec les applications système par défaut...[/cyan]")
+            size_str = format_size(size)
+            
+            while True:
+                options = []
                 for p in paths:
-                    open_file_system(p)
-                time.sleep(0.8)
-                continue
+                    try:
+                        rel_p = p.relative_to(organizer.target_dir)
+                    except ValueError:
+                        rel_p = p
+                    options.append(t("dup_keep_only", path=rel_p))
+                    
+                options.append(t("dup_compare_files"))
+                options.append(t("dup_skip_group"))
                 
-            else:
-                # Ignorer ce groupe
-                console.print("[dim]Groupe ignoré.[/dim]")
-                break
+                header = t("dup_group_header", idx=group_idx, total=len(duplicate_groups), size=size_str)
+                choice_idx = interactive_select(options, header)
                 
-        group_idx += 1
-        console.print("─" * 40)
+                if choice_idx < len(paths):
+                    # User wants to keep this specific copy
+                    keep_path = paths[choice_idx]
+                    del_paths = [p for p in paths if p != keep_path]
+                    
+                    for dp in del_paths:
+                        try:
+                            if dp.exists():
+                                dest = organizer.resolve_conflict(trash_dir / dp.name)
+                                shutil.move(str(dp), str(dest))
+                                deleted_count += 1
+                                total_freed_size += size
+                        except Exception as e:
+                            errors.append(t("open_file_error", name=dp.name, err=str(e)))
+                    break
+                    
+                elif choice_idx == len(paths):
+                    # Launch default opening action for comparisons
+                    console.print(f"[cyan]{t('dup_opening_files')}[/cyan]")
+                    for p in paths:
+                        open_file_system(p)
+                    time.sleep(0.8)
+                    continue
+                    
+                else:
+                    # Bypass this duplicate group
+                    console.print(f"[dim]{t('dup_group_ignored')}[/dim]")
+                    break
+                    
+            group_idx += 1
+            console.print("─" * 40)
         
     console.print(Panel(
-        f"[bold green]Opération terminée ![/bold green]\n"
-        f"• Doublons nettoyés : [cyan]{deleted_count}[/cyan]\n"
-        f"• Espace disque récupéré : [bold magenta]{format_size(total_freed_size)}[/bold magenta]",
+        t("dup_summary", count=deleted_count, size=format_size(total_freed_size)),
         border_style="green",
-        title="[bold]Bilan Nettoyage Doublons[/bold]"
+        title=f"[bold]{t('dup_summary_title')}[/bold]"
     ))
     
     if errors:
-        console.print("[bold red]Certaines erreurs sont survenues :[/bold red]")
+        console.print(f"[bold red]{t('some_errors_occurred')}[/bold red]")
         for err in errors:
             console.print(f"[red]• {err}[/red]")
+    Prompt.ask(t("press_enter"))
 
 def run_cleanup_flow(organizer: CabinetOrganizer):
-    """Gère le nettoyage et l'archivage par âge."""
-    days_str = Prompt.ask("[bold]Âge minimal des fichiers à nettoyer (en jours, ou 'q' pour annuler)[/bold]", default="30").strip()
+    """Identify and archive or delete files based on age rules."""
+    days_str = Prompt.ask(f"[bold]{t('cleanup_age_prompt')}[/bold]", default="30").strip()
     if days_str.lower() in ('q', 'quit', 'cancel', 'exit', 'back'):
-        console.print("[dim]Action annulée. Retour au menu principal.[/dim]")
+        console.print(f"[dim]{t('cleanup_canceled_msg')}[/dim]")
+        Prompt.ask(t("press_enter"))
         return
         
     try:
@@ -479,10 +518,10 @@ def run_cleanup_flow(organizer: CabinetOrganizer):
         days = 30
         
     action_choices = [
-        "Compacter dans une archive ZIP (Recommandé)",
-        "Déplacer directement vers la Corbeille"
+        t("cleanup_opt_zip"),
+        t("cleanup_opt_trash")
     ]
-    action_idx = interactive_select(action_choices, "[bold yellow]Choisissez l'action de nettoyage :[/bold yellow]")
+    action_idx = interactive_select(action_choices, f"[bold yellow]{t('cleanup_action_select')}[/bold yellow]")
     action = "archive" if action_idx == 0 else "trash"
     
     with Progress(
@@ -490,20 +529,21 @@ def run_cleanup_flow(organizer: CabinetOrganizer):
         TextColumn("[progress.description]{task.description}"),
         transient=True
     ) as progress:
-        progress.add_task("[cyan]Recherche des vieux fichiers...", total=None)
+        progress.add_task(f"[cyan]{t('cleanup_scanning')}", total=None)
         old_files = organizer.get_old_files(days)
         
     if not old_files:
         console.print(Panel(
-            f"[bold green]Aucun fichier plus vieux de {days} jours trouvé dans vos dossiers.[/bold green]",
+            f"[bold green]{t('cleanup_no_old', days=days)}[/bold green]",
             border_style="green"
         ))
+        Prompt.ask(t("press_enter"))
         return
         
-    table = Table(title=f"Fichiers trouvés (>= {days} jours)", border_style="yellow")
-    table.add_column("Fichier", style="cyan")
-    table.add_column("Dernière modification", style="yellow")
-    table.add_column("Taille", justify="right", style="magenta")
+    table = Table(title=t("cleanup_found_title", days=days), border_style="yellow")
+    table.add_column(t("summary_file"), style="cyan")
+    table.add_column(t("date_label"), style="yellow")
+    table.add_column(t("summary_size"), justify="right", style="magenta")
     
     total_size = 0
     for file in old_files:
@@ -522,14 +562,12 @@ def run_cleanup_flow(organizer: CabinetOrganizer):
             continue
             
     console.print(table)
-    console.print(
-        f"\n[bold yellow]Total :[/bold yellow] [cyan]{len(old_files)}[/cyan] fichiers anciens détectés. "
-        f"Taille globale : [bold magenta]{format_size(total_size)}[/bold magenta]\n"
-    )
+    console.print(t("cleanup_total", count=len(old_files), size=format_size(total_size)))
     
-    confirm = interactive_confirm(f"Confirmer le traitement ({'Archive' if action == 'archive' else 'Corbeille'}) ?")
+    confirm = interactive_confirm(t("cleanup_confirm", action=t("cleanup_opt_trash") if action == "trash" else t("cleanup_opt_zip")))
     if not confirm:
-        console.print("[dim]Action annulée.[/dim]")
+        console.print(f"[dim]{t('action_canceled')}[/dim]")
+        Prompt.ask(t("press_enter"))
         return
         
     with Progress(
@@ -537,93 +575,90 @@ def run_cleanup_flow(organizer: CabinetOrganizer):
         TextColumn("[progress.description]{task.description}"),
         transient=True
     ) as progress:
-        progress.add_task("[cyan]Traitement en cours...", total=None)
+        progress.add_task(f"[cyan]{t('processing')}", total=None)
         success_count, archive_path, errors = organizer.clean_old_files(days, action)
         
     if success_count > 0:
         if action == "trash":
             console.print(Panel(
-                f"[bold green]Succès ! {success_count} fichier(s) déplacé(s) vers la Corbeille macOS.[/bold green]",
+                f"[bold green]{t('cleanup_success_trash', count=success_count)}[/bold green]",
                 border_style="green"
             ))
         else:
             console.print(Panel(
-                f"[bold green]Succès ! {success_count} fichier(s) archivé(s) dans le ZIP :[/bold green]\n"
-                f"[bold cyan]{archive_path.name}[/bold cyan]\n"
-                f"Les originaux ont été déplacés vers la Corbeille.",
+                f"[bold green]{t('cleanup_success_archive', count=success_count, path=archive_path.name)}[/bold green]",
                 border_style="green"
             ))
             
     if errors:
-        console.print("[bold red]Certaines erreurs sont survenues :[/bold red]")
+        console.print(f"[bold red]{t('some_errors_occurred')}[/bold red]")
         for err in errors:
             console.print(f"[red]• {err}[/red]")
+    Prompt.ask(t("press_enter"))
 
 def run_smart_rules_flow():
-    """Gère le sous-menu de configuration des Smart Rules."""
+    """Render the configuration settings menu for pattern-based Smart Rules."""
     while True:
         console.clear()
         console.print(Panel(
-            "[bold cyan]Règles de Tri Personnalisées (Smart Rules)[/bold cyan]\n"
-            "Associez des mots-clés dans les noms de fichiers à des dossiers cibles spécifiques.\n"
-            "Ces règles s'appliquent en priorité absolue sur le rangement.",
+            f"[bold cyan]{t('rules_banner')}[/bold cyan]",
             border_style="cyan"
         ))
         
         rules = load_rules()
         options = [
-            "Lister les règles actives",
-            "Ajouter une nouvelle règle",
-            "Supprimer une règle",
-            "Retour au menu principal"
+            t("rules_opt_list"),
+            t("rules_opt_add"),
+            t("rules_opt_delete"),
+            t("rules_opt_back")
         ]
-        choice_idx = interactive_select(options, "[bold magenta]Sélectionnez une option :[/bold magenta]")
+        choice_idx = interactive_select(options, f"[bold magenta]{t('rules_select_option')}[/bold magenta]")
         
         if choice_idx == 0:
             if not rules:
-                console.print("\n[yellow]Aucune règle personnalisée active.[/yellow]")
+                console.print(t("rules_none_active"))
             else:
-                table = Table(title="Règles de tri personnalisées", border_style="cyan")
-                table.add_column("Mot-clé (Pattern)", style="green", bold=True)
-                table.add_column("Dossier de destination", style="yellow")
+                table = Table(title=t("rules_table_title"), border_style="cyan")
+                table.add_column(t("rules_table_pattern"), style="green", bold=True)
+                table.add_column(t("rules_table_folder"), style="yellow")
                 for r in rules:
                     table.add_row(r.get("pattern", ""), r.get("folder", ""))
                 console.print(table)
-            Prompt.ask("\nAppuyez sur Entrée pour continuer")
+            Prompt.ask(t("press_enter"))
             
         elif choice_idx == 1:
-            pattern = Prompt.ask("\n[bold]Entrez le mot-clé (ex: facture, devis, zoom) [dim](ou 'q' pour annuler)[/dim][/bold]").strip()
+            pattern = Prompt.ask(f"\n[bold]{t('rules_enter_pattern')}[/bold]").strip()
             if not pattern or pattern.lower() in ('q', 'quit', 'cancel', 'exit', 'back'):
-                console.print("[dim]Ajout annulé.[/dim]")
-                Prompt.ask("\nAppuyez sur Entrée pour continuer")
+                console.print(f"[dim]{t('rules_add_canceled')}[/dim]")
+                Prompt.ask(t("press_enter"))
                 continue
                 
-            folder = Prompt.ask("[bold]Entrez le dossier cible (ex: Documents/Factures, Vidéos/Reunions) [dim](ou 'q' pour annuler)[/dim][/bold]").strip()
+            folder = Prompt.ask(f"[bold]{t('rules_enter_folder')}[/bold]").strip()
             if not folder or folder.lower() in ('q', 'quit', 'cancel', 'exit', 'back'):
-                console.print("[dim]Ajout annulé.[/dim]")
-                Prompt.ask("\nAppuyez sur Entrée pour continuer")
+                console.print(f"[dim]{t('rules_add_canceled')}[/dim]")
+                Prompt.ask(t("press_enter"))
                 continue
                 
             if any(r.get("pattern", "").lower() == pattern.lower() for r in rules):
-                console.print("[red]Une règle existe déjà pour ce mot-clé.[/red]")
-                Prompt.ask("\nAppuyez sur Entrée pour continuer")
+                console.print(t("rules_already_exists"))
+                Prompt.ask(t("press_enter"))
                 continue
                 
             rules.append({"pattern": pattern, "folder": folder})
             save_rules(rules)
-            console.print(f"[green]Règle ajoutée : [bold]{pattern}[/bold] ➔ [bold]{folder}[/bold][/green]")
-            Prompt.ask("\nAppuyez sur Entrée pour continuer")
+            console.print(t("rules_added_success", pattern=pattern, folder=folder))
+            Prompt.ask(t("press_enter"))
             
         elif choice_idx == 2:
             if not rules:
-                console.print("\n[yellow]Aucune règle à supprimer.[/yellow]")
-                Prompt.ask("\nAppuyez sur Entrée pour continuer")
+                console.print(t("rules_none_to_delete"))
+                Prompt.ask(t("press_enter"))
                 continue
                 
-            table = Table(title="Supprimer une règle", border_style="red")
-            table.add_column("N°", justify="center", style="bold red")
-            table.add_column("Mot-clé", style="green")
-            table.add_column("Dossier cible", style="yellow")
+            table = Table(title=t("rules_delete_title"), border_style="red")
+            table.add_column(t("rules_num_col"), justify="center", style="bold red")
+            table.add_column(t("rules_keyword_col"), style="green")
+            table.add_column(t("rules_target_col"), style="yellow")
             
             for idx, r in enumerate(rules, start=1):
                 table.add_row(str(idx), r.get("pattern", ""), r.get("folder", ""))
@@ -631,11 +666,11 @@ def run_smart_rules_flow():
             console.print(table)
             
             del_idx_str = Prompt.ask(
-                "[bold]Entrez le numéro de la règle à supprimer (ou Entrée pour annuler)[/bold]",
+                f"[bold]{t('rules_enter_number_to_delete')}[/bold]",
                 default=""
             ).strip()
             if not del_idx_str or del_idx_str.lower() in ('q', 'quit', 'cancel', 'exit', 'back'):
-                console.print("[dim]Suppression annulée.[/dim]")
+                console.print(f"[dim]{t('rules_delete_canceled')}[/dim]")
                 continue
                 
             try:
@@ -643,31 +678,32 @@ def run_smart_rules_flow():
                 if 0 <= del_idx < len(rules):
                     removed = rules.pop(del_idx)
                     save_rules(rules)
-                    console.print(f"[green]Règle [bold]{removed['pattern']}[/bold] supprimée.[/green]")
+                    console.print(t("rules_deleted_success", pattern=removed['pattern']))
                 else:
-                    console.print("[red]Numéro invalide.[/red]")
+                    console.print(t("rules_invalid_number"))
             except ValueError:
-                console.print("[red]Entrée invalide.[/red]")
-            Prompt.ask("\nAppuyez sur Entrée pour continuer")
+                console.print(t("rules_invalid_input"))
+            Prompt.ask(t("press_enter"))
             
         elif choice_idx == 3:
             break
 
 def run_stats_flow(organizer: CabinetOrganizer):
-    """Gère l'affichage graphique des statistiques d'espace."""
+    """Gather file metrics and render directory layout analysis."""
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         transient=True
     ) as progress:
-        progress.add_task("[cyan]Analyse de l'espace disque...", total=None)
+        progress.add_task(f"[cyan]{t('stats_scanning')}", total=None)
         files = organizer.scan_all_files_recursive()
         
     if not files:
         console.print(Panel(
-            "[bold yellow]Aucun fichier trouvé dans le répertoire cible pour générer des statistiques.[/bold yellow]",
+            f"[bold yellow]{t('stats_no_files')}[/bold yellow]",
             border_style="yellow"
         ))
+        Prompt.ask(t("press_enter"))
         return
         
     stats: Dict[str, Dict[str, any]] = {}
@@ -681,7 +717,7 @@ def run_stats_flow(organizer: CabinetOrganizer):
             
             try:
                 rel = file.relative_to(organizer.target_dir)
-                category = rel.parts[0] if len(rel.parts) > 1 else "Racine"
+                category = rel.parts[0] if len(rel.parts) > 1 else t("stats_root_label")
             except ValueError:
                 category = "Divers"
                 
@@ -693,12 +729,12 @@ def run_stats_flow(organizer: CabinetOrganizer):
         except Exception:
             continue
             
-    table = Table(title="Répartition de l'espace disque par catégorie", border_style="cyan")
-    table.add_column("Dossier / Catégorie", style="bold green")
-    table.add_column("Fichiers", justify="right", style="cyan")
-    table.add_column("Espace occupé", justify="right", style="magenta")
-    table.add_column("Part", justify="right", style="yellow")
-    table.add_column("Jauge (Graphique)", style="white")
+    table = Table(title=t("stats_table_title"), border_style="cyan")
+    table.add_column(t("stats_col_folder"), style="bold green")
+    table.add_column(t("stats_col_files"), justify="right", style="cyan")
+    table.add_column(t("stats_col_size"), justify="right", style="magenta")
+    table.add_column(t("stats_col_ratio"), justify="right", style="yellow")
+    table.add_column(t("stats_col_visual"), style="white")
     
     sorted_stats = sorted(stats.items(), key=lambda item: item[1]["size"], reverse=True)
     max_bar_width = 25
@@ -728,7 +764,7 @@ def run_stats_flow(organizer: CabinetOrganizer):
         
     table.add_section()
     table.add_row(
-        "Total",
+        t("stats_total"),
         str(total_files),
         format_size(total_size),
         "100.0 %",
@@ -736,18 +772,18 @@ def run_stats_flow(organizer: CabinetOrganizer):
     )
     
     console.print(table)
-    Prompt.ask("\nAppuyez sur Entrée pour continuer")
+    Prompt.ask(t("press_enter_continue"))
 
 def main():
-    """Point d'entrée principal de l'application Cabinet CLI."""
+    """Main application loop and CLI routing entry point."""
     from cabinet.config import setup_logging, LOG_FILE
     import logging
     
     setup_logging()
-    logging.info("=== Démarrage de la session Cabinet CLI ===")
+    logging.info("=== Starting Cabinet CLI session ===")
     
     try:
-        # Lancement de l'animation de démarrage colorée
+        # Trigger glowing colored welcome animation banner
         welcome_animation()
         
         organizer = CabinetOrganizer(DEFAULT_TARGET_DIR)
@@ -755,36 +791,35 @@ def main():
         while True:
             console.clear()
             
-            # Titre et crédits du créateur Moussandou
             styled_banner = Text(BANNER, style="bold cyan")
             console.print(Align.center(styled_banner))
-            console.print(Align.center("[bold magenta]─── Votre classeur virtuel pour dossier Downloads ───[/bold magenta]"))
-            console.print(Align.center("[dim white]Créé avec passion par [bold cyan]Moussandou[/bold cyan][/dim white]\n"))
+            console.print(Align.center(f"[bold magenta]─── {t('welcome_banner')} ───[/bold magenta]"))
+            console.print(Align.center(f"[dim white]{t('created_by')} [bold cyan]Moussandou[/bold cyan][/dim white]\n"))
             
             console.print(Panel(
-                f"Dossier surveillé : [bold cyan]{organizer.target_dir}[/bold cyan]\n"
-                "Prêt à trier et organiser intelligemment vos fichiers !",
+                f"{t('monitored_folder')} : [bold cyan]{organizer.target_dir}[/bold cyan]\n"
+                f"{t('ready_to_organize')}",
                 border_style="magenta",
                 title="[bold]Cabinet CLI[/bold]",
                 title_align="center"
             ))
             
             options = [
-                "Classer par Catégorie (ex: Images, Documents, Code...)",
-                "Classer par Date (ex: Année-Mois/)",
-                "Classer par Extension (ex: PNG/, PDF/, ZIP/)",
-                "Classer en mode Hybride (ex: Images/Année-Mois/)",
-                "Annuler le dernier rangement (Undo)",
-                "Trouver et supprimer les doublons",
-                "Nettoyer/Archiver les vieux fichiers",
-                "Gérer les règles personnalisées (Smart Rules)",
-                "Statistiques de l'espace disque (Graphique)",
-                "Quitter"
+                t("menu_category"),
+                t("menu_date"),
+                t("menu_extension"),
+                t("menu_hybrid"),
+                t("menu_undo"),
+                t("menu_duplicates"),
+                t("menu_cleanup"),
+                t("menu_rules"),
+                t("menu_stats"),
+                t("menu_language"),
+                t("menu_quit")
             ]
             
-            choice_idx = interactive_select(options, "[bold magenta]Menu Principal :[/bold magenta]")
+            choice_idx = interactive_select(options, f"[bold magenta]{t('menu_title')}[/bold magenta]")
             
-            # Traitement de l'option choisie
             if choice_idx == 0:
                 run_organization_flow(organizer, "category")
             elif choice_idx == 1:
@@ -804,27 +839,35 @@ def main():
             elif choice_idx == 8:
                 run_stats_flow(organizer)
             elif choice_idx == 9:
-                console.print("\n[bold green]Au revoir ! Merci d'avoir utilisé Cabinet.[/bold green]")
-                logging.info("Fermeture propre de Cabinet CLI.")
+                # Dynamic language selection sub-menu
+                lang_options = ["English", "Français"]
+                lang_choice = interactive_select(lang_options, "Select language / Sélectionnez la langue :")
+                if lang_choice == 0:
+                    set_language("en")
+                elif lang_choice == 1:
+                    set_language("fr")
+            elif choice_idx == 10:
+                console.print(f"\n[bold green]{t('quit_goodbye')}[/bold green]")
+                logging.info("Graceful shutdown of Cabinet CLI.")
                 break
             
             console.print("\n" + "─" * 50 + "\n")
     except KeyboardInterrupt:
-        logging.info("Session interrompue par l'utilisateur (Ctrl+C)")
-        console.print("\n\n[bold yellow]Cabinet interrompu (Ctrl+C). Au revoir ![/bold yellow]")
+        logging.info("Session interrupted by user (Ctrl+C)")
+        console.print(f"\n\n[bold yellow]{t('cabinet_interrupted')}[/bold yellow]")
         try:
             console.show_cursor(True)
         except Exception:
             pass
         sys.exit(0)
     except Exception as e:
-        logging.exception("Une erreur inattendue et critique est survenue dans main() :")
+        logging.exception("An unexpected critical error occurred in main():")
         console.print(Panel(
-            f"[bold red]Une erreur inattendue est survenue :[/bold red] {str(e)}\n\n"
-            f"Les détails techniques du crash ont été enregistrés dans :\n"
+            f"[bold red]{t('unexpected_error')} :[/bold red] {str(e)}\n\n"
+            f"{t('technical_details')} :\n"
             f"[bold cyan]{LOG_FILE}[/bold cyan]\n\n"
-            "Veuillez soumettre ce fichier pour débogage.",
-            title="[bold red]Erreur Critique de Cabinet[/bold red]",
+            f"{t('submit_for_debugging')}",
+            title=f"[bold red]{t('critical_error_title')}[/bold red]",
             border_style="red"
         ))
         try:
