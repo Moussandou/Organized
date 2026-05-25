@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cabinet-cli"
+version = "1.0.0"
+description = "Un outil CLI élégant, coloré et interactif pour désencombrer et organiser votre dossier de téléchargements."
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+cabinet = "cabinet.cli:main"
