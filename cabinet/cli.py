@@ -465,7 +465,11 @@ def run_duplicates_flow(organizer: CabinetOrganizer):
 
 def run_cleanup_flow(organizer: CabinetOrganizer):
     """Gère le nettoyage et l'archivage par âge."""
-    days_str = Prompt.ask("[bold]Âge minimal des fichiers à nettoyer (en jours)[/bold]", default="30")
+    days_str = Prompt.ask("[bold]Âge minimal des fichiers à nettoyer (en jours, ou 'q' pour annuler)[/bold]", default="30").strip()
+    if days_str.lower() in ('q', 'quit', 'cancel', 'exit', 'back'):
+        console.print("[dim]Action annulée. Retour au menu principal.[/dim]")
+        return
+        
     try:
         days = int(days_str)
     except ValueError:
@@ -585,12 +589,16 @@ def run_smart_rules_flow():
             Prompt.ask("\nAppuyez sur Entrée pour continuer")
             
         elif choice_idx == 1:
-            pattern = Prompt.ask("\n[bold]Entrez le mot-clé (ex: facture, devis, zoom)[/bold]").strip()
-            if not pattern:
+            pattern = Prompt.ask("\n[bold]Entrez le mot-clé (ex: facture, devis, zoom) [dim](ou 'q' pour annuler)[/dim][/bold]").strip()
+            if not pattern or pattern.lower() in ('q', 'quit', 'cancel', 'exit', 'back'):
+                console.print("[dim]Ajout annulé.[/dim]")
+                Prompt.ask("\nAppuyez sur Entrée pour continuer")
                 continue
                 
-            folder = Prompt.ask("[bold]Entrez le dossier cible (ex: Documents/Factures, Vidéos/Reunions)[/bold]").strip()
-            if not folder:
+            folder = Prompt.ask("[bold]Entrez le dossier cible (ex: Documents/Factures, Vidéos/Reunions) [dim](ou 'q' pour annuler)[/dim][/bold]").strip()
+            if not folder or folder.lower() in ('q', 'quit', 'cancel', 'exit', 'back'):
+                console.print("[dim]Ajout annulé.[/dim]")
+                Prompt.ask("\nAppuyez sur Entrée pour continuer")
                 continue
                 
             if any(r.get("pattern", "").lower() == pattern.lower() for r in rules):
@@ -622,8 +630,9 @@ def run_smart_rules_flow():
             del_idx_str = Prompt.ask(
                 "[bold]Entrez le numéro de la règle à supprimer (ou Entrée pour annuler)[/bold]",
                 default=""
-            )
-            if not del_idx_str:
+            ).strip()
+            if not del_idx_str or del_idx_str.lower() in ('q', 'quit', 'cancel', 'exit', 'back'):
+                console.print("[dim]Suppression annulée.[/dim]")
                 continue
                 
             try:
@@ -728,67 +737,75 @@ def run_stats_flow(organizer: CabinetOrganizer):
 
 def main():
     """Point d'entrée principal de l'application Cabinet CLI."""
-    # Lancement de l'animation de démarrage colorée
-    welcome_animation()
-    
-    organizer = CabinetOrganizer(DEFAULT_TARGET_DIR)
-    
-    while True:
-        console.clear()
+    try:
+        # Lancement de l'animation de démarrage colorée
+        welcome_animation()
         
-        # Titre et crédits du créateur Moussandou
-        styled_banner = Text(BANNER, style="bold cyan")
-        console.print(Align.center(styled_banner))
-        console.print(Align.center("[bold magenta]─── Votre classeur virtuel pour dossier Downloads ───[/bold magenta]"))
-        console.print(Align.center("[dim white]Créé avec passion par [bold cyan]Moussandou[/bold cyan][/dim white]\n"))
+        organizer = CabinetOrganizer(DEFAULT_TARGET_DIR)
         
-        console.print(Panel(
-            f"Dossier surveillé : [bold cyan]{organizer.target_dir}[/bold cyan]\n"
-            "Prêt à trier et organiser intelligemment vos fichiers !",
-            border_style="magenta",
-            title="[bold]Cabinet CLI[/bold]",
-            title_align="center"
-        ))
-        
-        options = [
-            "Classer par Catégorie (ex: Images, Documents, Code...)",
-            "Classer par Date (ex: Année-Mois/)",
-            "Classer par Extension (ex: PNG/, PDF/, ZIP/)",
-            "Classer en mode Hybride (ex: Images/Année-Mois/)",
-            "Annuler le dernier rangement (Undo)",
-            "Trouver et supprimer les doublons",
-            "Nettoyer/Archiver les vieux fichiers",
-            "Gérer les règles personnalisées (Smart Rules)",
-            "Statistiques de l'espace disque (Graphique)",
-            "Quitter"
-        ]
-        
-        choice_idx = interactive_select(options, "[bold magenta]Menu Principal :[/bold magenta]")
-        
-        # Traitement de l'option choisie
-        if choice_idx == 0:
-            run_organization_flow(organizer, "category")
-        elif choice_idx == 1:
-            run_organization_flow(organizer, "date")
-        elif choice_idx == 2:
-            run_organization_flow(organizer, "extension")
-        elif choice_idx == 3:
-            run_organization_flow(organizer, "hybrid")
-        elif choice_idx == 4:
-            run_undo(organizer)
-        elif choice_idx == 5:
-            run_duplicates_flow(organizer)
-        elif choice_idx == 6:
-            run_cleanup_flow(organizer)
-        elif choice_idx == 7:
-            run_smart_rules_flow()
-        elif choice_idx == 8:
-            run_stats_flow(organizer)
-        elif choice_idx == 9:
-            console.print("\n[bold green]Au revoir ! Merci d'avoir utilisé Cabinet.[/bold green]")
-            break
-        
-        console.print("\n" + "─" * 50 + "\n")
+        while True:
+            console.clear()
+            
+            # Titre et crédits du créateur Moussandou
+            styled_banner = Text(BANNER, style="bold cyan")
+            console.print(Align.center(styled_banner))
+            console.print(Align.center("[bold magenta]─── Votre classeur virtuel pour dossier Downloads ───[/bold magenta]"))
+            console.print(Align.center("[dim white]Créé avec passion par [bold cyan]Moussandou[/bold cyan][/dim white]\n"))
+            
+            console.print(Panel(
+                f"Dossier surveillé : [bold cyan]{organizer.target_dir}[/bold cyan]\n"
+                "Prêt à trier et organiser intelligemment vos fichiers !",
+                border_style="magenta",
+                title="[bold]Cabinet CLI[/bold]",
+                title_align="center"
+            ))
+            
+            options = [
+                "Classer par Catégorie (ex: Images, Documents, Code...)",
+                "Classer par Date (ex: Année-Mois/)",
+                "Classer par Extension (ex: PNG/, PDF/, ZIP/)",
+                "Classer en mode Hybride (ex: Images/Année-Mois/)",
+                "Annuler le dernier rangement (Undo)",
+                "Trouver et supprimer les doublons",
+                "Nettoyer/Archiver les vieux fichiers",
+                "Gérer les règles personnalisées (Smart Rules)",
+                "Statistiques de l'espace disque (Graphique)",
+                "Quitter"
+            ]
+            
+            choice_idx = interactive_select(options, "[bold magenta]Menu Principal :[/bold magenta]")
+            
+            # Traitement de l'option choisie
+            if choice_idx == 0:
+                run_organization_flow(organizer, "category")
+            elif choice_idx == 1:
+                run_organization_flow(organizer, "date")
+            elif choice_idx == 2:
+                run_organization_flow(organizer, "extension")
+            elif choice_idx == 3:
+                run_organization_flow(organizer, "hybrid")
+            elif choice_idx == 4:
+                run_undo(organizer)
+            elif choice_idx == 5:
+                run_duplicates_flow(organizer)
+            elif choice_idx == 6:
+                run_cleanup_flow(organizer)
+            elif choice_idx == 7:
+                run_smart_rules_flow()
+            elif choice_idx == 8:
+                run_stats_flow(organizer)
+            elif choice_idx == 9:
+                console.print("\n[bold green]Au revoir ! Merci d'avoir utilisé Cabinet.[/bold green]")
+                break
+            
+            console.print("\n" + "─" * 50 + "\n")
+    except KeyboardInterrupt:
+        console.print("\n\n[bold yellow]Cabinet interrompu (Ctrl+C). Au revoir ![/bold yellow]")
+        try:
+            console.show_cursor(True)
+        except Exception:
+            pass
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()
