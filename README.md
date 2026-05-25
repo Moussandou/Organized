@@ -27,25 +27,25 @@ Here is how **Cabinet** processes and organizes your unstructured files:
 ### ⚙️ Processing Pipeline
 ```mermaid
 graph TD
-    A[Scan downloads folder] --> B{Filter active downloads?}
-    B -- Yes: suffix is .crdownload/.part/.tmp --> C[Ignore file]
-    B -- No --> D{Matches Custom Smart Rule?}
-    D -- Yes: keyword match --> E[Route to custom target folder]
-    D -- No --> F{Apply Selected Strategy}
-    F -- Category --> G[Route by File Type]
-    F -- Date --> H[Route by YYYY-MM]
-    F -- Extension --> I[Route by EXT folder]
-    F -- Hybrid --> J[Route by Category/YYYY-MM]
-    E --> K{Check Destination Conflict}
+    A["Scan downloads folder"] --> B{"Filter active downloads?"}
+    B -- "Yes: suffix is .crdownload/.part/.tmp" --> C["Ignore file"]
+    B -- "No" --> D{"Matches Custom Smart Rule?"}
+    D -- "Yes: keyword match" --> E["Route to custom target folder"]
+    D -- "No" --> F{"Apply Selected Strategy"}
+    F -- "Category" --> G["Route by File Type"]
+    F -- "Date" --> H["Route by YYYY-MM"]
+    F -- "Extension" --> I["Route by EXT folder"]
+    F -- "Hybrid" --> J["Route by Category/YYYY-MM"]
+    E --> K{"Check Destination Conflict"}
     G --> K
     H --> K
     I --> K
     J --> K
-    K -- File already exists --> L[Auto-Rename: name (1).ext]
-    K -- Available --> M[Add to Tree Preview]
-    M --> N[Show Preview Tree to User]
-    N -- Confirm: Yes --> O[Perform physical move & Log to History]
-    N -- Confirm: No --> P[Cancel operation]
+    K -- "File already exists" --> L["Auto-Rename: name (1).ext"]
+    K -- "Available" --> M["Add to Tree Preview"]
+    M --> N["Show Preview Tree to User"]
+    N -- "Confirm: Yes" --> O["Perform physical move & Log to History"]
+    N -- "Confirm: No" --> P["Cancel operation"]
 ```
 
 ### 📤 The Result: Structured Organization
