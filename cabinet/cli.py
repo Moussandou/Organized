@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Dict, List, Tuple
 from datetime import datetime
@@ -12,10 +13,19 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 from rich.prompt import Prompt, Confirm
 from rich.align import Align
 from rich.text import Text
+from rich.live import Live
 
 from cabinet.config import DEFAULT_TARGET_DIR, load_rules, save_rules
 from cabinet.organizer import CabinetOrganizer
 from cabinet.history import save_session, get_last_session, pop_last_session
+
+# Compatibilité système pour la lecture brute des touches
+try:
+    import tty
+    import termios
+    UNIX_SYSTEM = True
+except ImportError:
+    UNIX_SYSTEM = False
 
 console = Console()
 
@@ -26,6 +36,128 @@ BANNER = """
 / /___/ /_/ / /_/ // / / / /  __/ /__/ /_  
 \____/\__,_/_.___//_/_/ /_/\___/\___/\__/  
 """
+
+def get_char() -> str:
+    """Lit un caractère depuis le terminal en mode brut (Unix/macOS)."""
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(sys.stdin.fileno())
+        ch = sys.stdin.read(1)
+        if ch == '\x03':  # Ctrl+C
+            raise KeyboardInterrupt
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    return ch
+
+def interactive_select(options: List[str], header: str = "") -> int:
+    """Affiche un menu interactif avec navigation par flèches du clavier."""
+    if not UNIX_SYSTEM:
+        # Fallback pour les systèmes non-Unix (ex: Windows)
+        if header:
+            console.print(header)
+        for idx, opt in enumerate(options, start=1):
+            console.print(f"  [bold cyan]{idx}[/bold cyan]. {opt}")
+        choice = Prompt.ask("\n[bold]Votre choix[/bold]", choices=[str(i) for i in range(1, len(options) + 1)], default="1")
+        return int(choice) - 1
+
+    selected_idx = 0
+    
+    def generate_view() -> Panel:
+        lines = []
+        for idx, option in enumerate(options):
+            if idx == selected_idx:
+                lines.append(f"[bold magenta] ❯ {option}[/bold magenta]")
+            else:
+                lines.append(f"   [dim white]{option}[/dim white]")
+                
+        menu_content = "\n".join(lines)
+        full_text = f"{header}\n\n{menu_content}" if header else menu_content
+        return Panel(
+            full_text,
+            border_style="magenta",
+            expand=False,
+            title="[bold]Navigation : ⇅ | Validation : Entrée[/bold]",
+            title_align="left"
+        )
+
+    console.show_cursor(False)
+    try:
+        with Live(generate_view(), auto_refresh=False, transient=True) as live:
+            while True:
+                live.update(generate_view())
+                live.refresh()
+                
+                ch = get_char()
+                if ch in ('\r', '\n'):
+                    return selected_idx
+                elif ch == '\x1b':  # Code d'échappement pour les flèches
+                    ch2 = get_char()
+                    ch3 = get_char()
+                    if ch2 == '[':
+                        if ch3 == 'A':    # Flèche Haut
+                            selected_idx = (selected_idx - 1) % len(options)
+                        elif ch3 == 'B':  # Flèche Bas
+                            selected_idx = (selected_idx + 1) % len(options)
+    finally:
+        console.show_cursor(True)
+
+def interactive_confirm(question: str) -> bool:
+    """Affiche une boîte de dialogue interactive Oui/Non avec déplacement horizontal."""
+    if not UNIX_SYSTEM:
+        return Confirm.ask(question)
+        
+    selected_idx = 0  # 0 = Oui, 1 = Non
+    options = ["Oui", "Non"]
+    
+    def generate_view() -> Panel:
+        buttons = []
+        for idx, opt in enumerate(options):
+            if idx == selected_idx:
+                buttons.append(f"[bold white on magenta]  {opt}  [/bold white on magenta]")
+            else:
+                buttons.append(f"[dim white]  {opt}  [/dim white]")
+                
+        button_line = "   ".join(buttons)
+        content = f"[bold white]{question}[/bold white]\n\n" + Align.center(button_line)
+        return Panel(
+            content,
+            border_style="cyan",
+            expand=False,
+            title="[bold]Confirmation[/bold]",
+            title_align="center"
+        )
+        
+    console.show_cursor(False)
+    try:
+        with Live(generate_view(), auto_refresh=False, transient=True) as live:
+            while True:
+                live.update(generate_view())
+                live.refresh()
+                
+                ch = get_char()
+                if ch in ('\r', '\n'):
+                    return selected_idx == 0
+                elif ch == '\x1b':
+                    ch2 = get_char()
+                    ch3 = get_char()
+                    if ch2 == '[':
+                        if ch3 in ('C', 'D'):  # Flèches Gauche/Droite
+                            selected_idx = 1 - selected_idx
+    finally:
+        console.show_cursor(True)
+
+def welcome_animation():
+    """Affiche un effet lumineux de chargement multicolore pour la bannière."""
+    console.clear()
+    colors = ["cyan", "magenta", "blue", "green"]
+    for color in colors:
+        console.clear()
+        styled_banner = Text(BANNER, style=f"bold {color}")
+        console.print(Align.center(styled_banner))
+        console.print(Align.center(f"[bold white]Démarrage de Cabinet CLI...[/bold white]"))
+        time.sleep(0.1)
+    console.clear()
 
 def format_size(size_in_bytes: int) -> str:
     """Formatte une taille d'octets en version lisible (Ko, Mo, Go)."""
@@ -91,7 +223,7 @@ def run_undo(organizer: CabinetOrganizer):
         border_style="yellow"
     ))
     
-    confirm = Confirm.ask("[bold]Voulez-vous restaurer ces fichiers à leur emplacement d'origine ?[/bold]")
+    confirm = interactive_confirm("Voulez-vous restaurer ces fichiers à leur emplacement d'origine ?")
     if not confirm:
         console.print("[dim]Annulation annulée.[/dim]")
         return
@@ -144,7 +276,7 @@ def run_organization_flow(organizer: CabinetOrganizer, strategy: str):
     console.print(tree_preview)
     console.print(f"\n[bold]Total : {len(files)} fichier(s) à organiser.[/bold]\n")
     
-    confirm = Confirm.ask("[bold]Confirmer le rangement ?[/bold]")
+    confirm = interactive_confirm("Confirmer le rangement ?")
     if not confirm:
         console.print("[dim]Rangement annulé.[/dim]")
         return
@@ -164,6 +296,7 @@ def run_organization_flow(organizer: CabinetOrganizer, strategy: str):
             moves.extend(file_moves)
             errors.extend(file_errors)
             progress.advance(task, 1)
+            time.sleep(0.02)  # Petite pause pour l'effet visuel fluide
             
     if moves:
         save_session(moves, strategy)
@@ -202,12 +335,12 @@ def run_organization_flow(organizer: CabinetOrganizer, strategy: str):
 
 def run_duplicates_flow(organizer: CabinetOrganizer):
     """Gère la recherche et le nettoyage des doublons."""
-    mode = Prompt.ask(
-        "[bold]Portée de la recherche[/bold]", 
-        choices=["Racine", "Récursif"], 
-        default="Racine"
-    )
-    recursive = (mode == "Récursif")
+    choices = [
+        "Dossier racine uniquement (Téléchargements)",
+        "Récursif (Tous les sous-dossiers compris)"
+    ]
+    idx = interactive_select(choices, "[bold yellow]Choisissez la portée de la recherche de doublons :[/bold yellow]")
+    recursive = (idx == 1)
     
     with Progress(
         SpinnerColumn(),
@@ -224,10 +357,9 @@ def run_duplicates_flow(organizer: CabinetOrganizer):
         ))
         return
         
-    # Présentation des doublons
-    table = Table(title=f"Doublons détectés ({mode})", border_style="yellow")
+    table = Table(title="Doublons détectés", border_style="yellow")
     table.add_column("Groupe", justify="center", style="bold yellow")
-    table.add_column("Fichiers correspondants (Le 1er est conservé, les autres seront supprimés)", style="cyan")
+    table.add_column("Fichiers correspondants", style="cyan")
     table.add_column("Taille", justify="right", style="magenta")
     
     total_redundant_size = 0
@@ -236,7 +368,6 @@ def run_duplicates_flow(organizer: CabinetOrganizer):
     
     for file_hash, paths in duplicate_groups.items():
         try:
-            # On conserve le premier fichier, on supprime les suivants
             keep_file = paths[0]
             del_files = paths[1:]
             
@@ -246,7 +377,6 @@ def run_duplicates_flow(organizer: CabinetOrganizer):
             
             files_to_delete.extend(del_files)
             
-            # Formatage de la ligne de texte
             file_lines = [f"[bold green]➔ Conserver :[/bold green] {keep_file.name}"]
             for df in del_files:
                 try:
@@ -270,7 +400,7 @@ def run_duplicates_flow(organizer: CabinetOrganizer):
         f"Espace récupérable : [bold magenta]{format_size(total_redundant_size)}[/bold magenta]\n"
     )
     
-    confirm = Confirm.ask("[bold]Voulez-vous envoyer les doublons à la Corbeille macOS ?[/bold]")
+    confirm = interactive_confirm("Voulez-vous envoyer les doublons à la Corbeille macOS ?")
     if not confirm:
         console.print("[dim]Action annulée.[/dim]")
         return
@@ -295,6 +425,7 @@ def run_duplicates_flow(organizer: CabinetOrganizer):
                     shutil.move(str(file), str(dest))
                     deleted_count += 1
                 progress.advance(task, 1)
+                time.sleep(0.02)
             except Exception as e:
                 errors.append(f"Erreur avec {file.name} : {str(e)}")
                 progress.advance(task, 1)
@@ -318,12 +449,12 @@ def run_cleanup_flow(organizer: CabinetOrganizer):
     except ValueError:
         days = 30
         
-    action_choice = Prompt.ask(
-        "[bold]Action à effectuer[/bold]", 
-        choices=["Corbeille", "Archive ZIP"], 
-        default="Archive ZIP"
-    )
-    action = "trash" if action_choice == "Corbeille" else "archive"
+    action_choices = [
+        "Compacter dans une archive ZIP (Recommandé)",
+        "Déplacer directement vers la Corbeille"
+    ]
+    action_idx = interactive_select(action_choices, "[bold yellow]Choisissez l'action de nettoyage :[/bold yellow]")
+    action = "archive" if action_idx == 0 else "trash"
     
     with Progress(
         SpinnerColumn(),
@@ -340,7 +471,6 @@ def run_cleanup_flow(organizer: CabinetOrganizer):
         ))
         return
         
-    # Liste des vieux fichiers
     table = Table(title=f"Fichiers trouvés (>= {days} jours)", border_style="yellow")
     table.add_column("Fichier", style="cyan")
     table.add_column("Dernière modification", style="yellow")
@@ -368,7 +498,7 @@ def run_cleanup_flow(organizer: CabinetOrganizer):
         f"Taille globale : [bold magenta]{format_size(total_size)}[/bold magenta]\n"
     )
     
-    confirm = Confirm.ask(f"[bold]Voulez-vous procéder à l'action [magenta]{action_choice}[/magenta] ?[/bold]")
+    confirm = interactive_confirm(f"Confirmer le traitement ({'Archive' if action == 'archive' else 'Corbeille'}) ?")
     if not confirm:
         console.print("[dim]Action annulée.[/dim]")
         return
@@ -405,23 +535,22 @@ def run_smart_rules_flow():
     while True:
         console.clear()
         console.print(Panel(
-            "[bold cyan]Configuration des Règles de Tri Personnalisées (Smart Rules)[/bold cyan]\n"
+            "[bold cyan]Règles de Tri Personnalisées (Smart Rules)[/bold cyan]\n"
             "Associez des mots-clés dans les noms de fichiers à des dossiers cibles spécifiques.\n"
             "Ces règles s'appliquent en priorité absolue sur le rangement.",
             border_style="cyan"
         ))
         
         rules = load_rules()
+        options = [
+            "Lister les règles actives",
+            "Ajouter une nouvelle règle",
+            "Supprimer une règle",
+            "Retour au menu principal"
+        ]
+        choice_idx = interactive_select(options, "[bold magenta]Sélectionnez une option :[/bold magenta]")
         
-        console.print("[bold magenta]Options :[/bold magenta]")
-        console.print("  [bold cyan]1[/bold cyan]. Lister les règles actives")
-        console.print("  [bold cyan]2[/bold cyan]. Ajouter une nouvelle règle")
-        console.print("  [bold cyan]3[/bold cyan]. Supprimer une règle")
-        console.print("  [bold cyan]4[/bold cyan]. Retour au menu principal")
-        
-        choice = Prompt.ask("\n[bold]Votre choix[/bold]", choices=["1", "2", "3", "4"], default="1")
-        
-        if choice == "1":
+        if choice_idx == 0:
             if not rules:
                 console.print("\n[yellow]Aucune règle personnalisée active.[/yellow]")
             else:
@@ -433,7 +562,7 @@ def run_smart_rules_flow():
                 console.print(table)
             Prompt.ask("\nAppuyez sur Entrée pour continuer")
             
-        elif choice == "2":
+        elif choice_idx == 1:
             pattern = Prompt.ask("\n[bold]Entrez le mot-clé (ex: facture, devis, zoom)[/bold]").strip()
             if not pattern:
                 continue
@@ -442,7 +571,6 @@ def run_smart_rules_flow():
             if not folder:
                 continue
                 
-            # Vérification des doublons de motifs
             if any(r.get("pattern", "").lower() == pattern.lower() for r in rules):
                 console.print("[red]Une règle existe déjà pour ce mot-clé.[/red]")
                 Prompt.ask("\nAppuyez sur Entrée pour continuer")
@@ -453,7 +581,7 @@ def run_smart_rules_flow():
             console.print(f"[green]Règle ajoutée : [bold]{pattern}[/bold] ➔ [bold]{folder}[/bold][/green]")
             Prompt.ask("\nAppuyez sur Entrée pour continuer")
             
-        elif choice == "3":
+        elif choice_idx == 2:
             if not rules:
                 console.print("\n[yellow]Aucune règle à supprimer.[/yellow]")
                 Prompt.ask("\nAppuyez sur Entrée pour continuer")
@@ -488,7 +616,7 @@ def run_smart_rules_flow():
                 console.print("[red]Entrée invalide.[/red]")
             Prompt.ask("\nAppuyez sur Entrée pour continuer")
             
-        elif choice == "4":
+        elif choice_idx == 3:
             break
 
 def run_stats_flow(organizer: CabinetOrganizer):
@@ -508,7 +636,6 @@ def run_stats_flow(organizer: CabinetOrganizer):
         ))
         return
         
-    # Calcul des tailles par sous-dossier ou dossier racine
     stats: Dict[str, Dict[str, any]] = {}
     total_size = 0
     total_files = len(files)
@@ -518,7 +645,6 @@ def run_stats_flow(organizer: CabinetOrganizer):
             size = file.stat().st_size
             total_size += size
             
-            # Détermine la catégorie (le dossier parent le plus proche du dossier Downloads)
             try:
                 rel = file.relative_to(organizer.target_dir)
                 category = rel.parts[0] if len(rel.parts) > 1 else "Racine"
@@ -533,7 +659,6 @@ def run_stats_flow(organizer: CabinetOrganizer):
         except Exception:
             continue
             
-    # Construction de la table
     table = Table(title="Répartition de l'espace disque par catégorie", border_style="cyan")
     table.add_column("Dossier / Catégorie", style="bold green")
     table.add_column("Fichiers", justify="right", style="cyan")
@@ -541,10 +666,7 @@ def run_stats_flow(organizer: CabinetOrganizer):
     table.add_column("Part", justify="right", style="yellow")
     table.add_column("Jauge (Graphique)", style="white")
     
-    # Tri par taille décroissante
     sorted_stats = sorted(stats.items(), key=lambda item: item[1]["size"], reverse=True)
-    
-    # Nombre max de caractères pour la jauge graphique
     max_bar_width = 25
     
     for cat, data in sorted_stats:
@@ -552,11 +674,9 @@ def run_stats_flow(organizer: CabinetOrganizer):
         count = data["count"]
         percentage = (cat_size / total_size) * 100 if total_size > 0 else 0
         
-        # Création de la barre graphique textuelle
         num_blocks = int((percentage / 100) * max_bar_width)
         bar = "█" * num_blocks + "░" * (max_bar_width - num_blocks)
         
-        # Couleur dynamique pour la jauge
         if percentage > 50:
             bar_color = "red"
         elif percentage > 25:
@@ -586,54 +706,63 @@ def run_stats_flow(organizer: CabinetOrganizer):
 
 def main():
     """Point d'entrée principal de l'application Cabinet CLI."""
-    console.clear()
-    styled_banner = Text(BANNER, style="bold cyan")
-    console.print(Align.center(styled_banner))
-    console.print(Align.center("[bold magenta]─── Votre classeur virtuel pour dossier Downloads ───[/bold magenta]\n"))
+    # Lancement de l'animation de démarrage colorée
+    welcome_animation()
     
     organizer = CabinetOrganizer(DEFAULT_TARGET_DIR)
     
-    console.print(Panel(
-        f"Dossier surveillé : [bold cyan]{organizer.target_dir}[/bold cyan]\n"
-        "Prêt à trier et organiser intelligemment vos fichiers !",
-        border_style="magenta",
-        title="[bold]Cabinet CLI[/bold]"
-    ))
-    
     while True:
-        console.print("[bold magenta]Menu Principal :[/bold magenta]")
-        console.print("  [bold cyan]1[/bold cyan]. Classer par [bold]Catégorie[/bold] (ex: Images, Documents, Code...)")
-        console.print("  [bold cyan]2[/bold cyan]. Classer par [bold]Date[/bold] (ex: Année-Mois/)")
-        console.print("  [bold cyan]3[/bold cyan]. Classer par [bold]Extension[/bold] (ex: PNG/, PDF/, ZIP/)")
-        console.print("  [bold cyan]4[/bold cyan]. Classer en mode [bold]Hybride[/bold] (ex: Images/Année-Mois/)")
-        console.print("  [bold cyan]5[/bold cyan]. [bold yellow]Annuler[/bold yellow] le dernier rangement (Undo)")
-        console.print("  [bold cyan]6[/bold cyan]. [bold red]Trouver et supprimer les doublons[/bold red]")
-        console.print("  [bold cyan]7[/bold cyan]. [bold yellow]Nettoyer/Archiver les vieux fichiers[/bold yellow]")
-        console.print("  [bold cyan]8[/bold cyan]. [bold cyan]Gérer les règles personnalisées (Smart Rules)[/bold cyan]")
-        console.print("  [bold cyan]9[/bold cyan]. [bold green]Statistiques de l'espace disque (Graphique)[/bold green]")
-        console.print("  [bold cyan]10[/bold cyan]. Quitter")
+        console.clear()
         
-        choice = Prompt.ask("\n[bold]Votre choix[/bold]", choices=[str(i) for i in range(1, 11)], default="1")
+        # Titre et crédits du créateur Moussandou
+        styled_banner = Text(BANNER, style="bold cyan")
+        console.print(Align.center(styled_banner))
+        console.print(Align.center("[bold magenta]─── Votre classeur virtuel pour dossier Downloads ───[/bold magenta]"))
+        console.print(Align.center("[dim white]Créé avec passion par [bold cyan]Moussandou[/bold cyan][/dim white]\n"))
         
-        if choice == "1":
+        console.print(Panel(
+            f"Dossier surveillé : [bold cyan]{organizer.target_dir}[/bold cyan]\n"
+            "Prêt à trier et organiser intelligemment vos fichiers !",
+            border_style="magenta",
+            title="[bold]Cabinet CLI[/bold]",
+            title_align="center"
+        ))
+        
+        options = [
+            "Classer par Catégorie (ex: Images, Documents, Code...)",
+            "Classer par Date (ex: Année-Mois/)",
+            "Classer par Extension (ex: PNG/, PDF/, ZIP/)",
+            "Classer en mode Hybride (ex: Images/Année-Mois/)",
+            "Annuler le dernier rangement (Undo)",
+            "Trouver et supprimer les doublons",
+            "Nettoyer/Archiver les vieux fichiers",
+            "Gérer les règles personnalisées (Smart Rules)",
+            "Statistiques de l'espace disque (Graphique)",
+            "Quitter"
+        ]
+        
+        choice_idx = interactive_select(options, "[bold magenta]Menu Principal :[/bold magenta]")
+        
+        # Traitement de l'option choisie
+        if choice_idx == 0:
             run_organization_flow(organizer, "category")
-        elif choice == "2":
+        elif choice_idx == 1:
             run_organization_flow(organizer, "date")
-        elif choice == "3":
+        elif choice_idx == 2:
             run_organization_flow(organizer, "extension")
-        elif choice == "4":
+        elif choice_idx == 3:
             run_organization_flow(organizer, "hybrid")
-        elif choice == "5":
+        elif choice_idx == 4:
             run_undo(organizer)
-        elif choice == "6":
+        elif choice_idx == 5:
             run_duplicates_flow(organizer)
-        elif choice == "7":
+        elif choice_idx == 6:
             run_cleanup_flow(organizer)
-        elif choice == "8":
+        elif choice_idx == 7:
             run_smart_rules_flow()
-        elif choice == "9":
+        elif choice_idx == 8:
             run_stats_flow(organizer)
-        elif choice == "10":
+        elif choice_idx == 9:
             console.print("\n[bold green]Au revoir ! Merci d'avoir utilisé Cabinet.[/bold green]")
             break
         
