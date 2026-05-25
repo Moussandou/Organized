@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 from datetime import datetime
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
@@ -119,7 +119,10 @@ def interactive_confirm(question: str) -> bool:
                 buttons.append(f"[dim white]  {opt}  [/dim white]")
                 
         button_line = "   ".join(buttons)
-        content = f"[bold white]{question}[/bold white]\n\n" + Align.center(button_line)
+        content = Group(
+            Text.from_markup(f"[bold white]{question}[/bold white]\n"),
+            Align.center(Text.from_markup(button_line))
+        )
         return Panel(
             content,
             border_style="cyan",
